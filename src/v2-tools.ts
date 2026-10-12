@@ -4,7 +4,7 @@ import { executeTeamSpawn } from "./tools/team-spawn"
 import { executeTeamMessage } from "./tools/team-message"
 import { executeTeamBroadcast } from "./tools/team-broadcast"
 import { executeTeamTasksList } from "./tools/team-tasks-list"
-import { executeTeamTasksAdd } from "./tools/team-tasks-add"
+import { executeTeamTasksAdd, type TaskInput } from "./tools/team-tasks-add"
 import { executeTeamTasksComplete } from "./tools/team-tasks-complete"
 import { executeTeamClaim } from "./tools/team-claim"
 import { executeTeamResults } from "./tools/team-results"
@@ -43,7 +43,7 @@ type TaskPriority = (typeof TASK_PRIORITIES)[number]
 
 /** JSON Schema enum property for task priority. */
 function priority(): Record<string, unknown> {
-  return { type: "string", description: "Task priority", enum: [...TASK_PRIORITIES], default: "medium" }
+  return { type: "string", description: "Task priority (medium on creation; preserved on update)", enum: [...TASK_PRIORITIES] }
 }
 
 /** Throw on unknown priority — fail fast instead of writing garbage to SQLite. */
@@ -167,7 +167,7 @@ export async function registerV2Tools(domain: V2ToolDomain, deps: ToolDeps): Pro
 
     editor.add({
       name: "team_tasks_add",
-      description: "Add tasks to the shared team task board so teammates can see what work is available and claim it.",
+      description: "Create tasks with explicit depends_on ([] for independent work), or lead-only review existing dependencies using task_id. Overflow returns a user approval preview or requires lead replanning.",
       input: {
         type: "object",
         properties: {
@@ -177,35 +177,31 @@ export async function registerV2Tools(domain: V2ToolDomain, deps: ToolDeps): Pro
             items: {
               type: "object",
               properties: {
+                task_id: str("Existing task ID to review (lead only); omit to create a new task"),
                 content: str("Task description"),
                 priority: priority(),
                 depends_on: {
                   type: "array",
                   items: { type: "string" },
-                  description: "Task IDs this depends on",
+                  description: "Required explicit prerequisites using real task IDs; [] declares independent work",
                 },
               },
-              required: ["content"],
+              required: ["depends_on"],
               additionalProperties: false,
             },
           },
+          depth_approval_token: str("One-use token from depth preview, only after a real approved user question"),
         },
         required: ["tasks"],
         additionalProperties: false,
       },
       execute: async (input: unknown, context: { sessionID: string }) => {
         const args = input as {
-          tasks: Array<{ content: string; priority?: string; depends_on?: string[] }>
+          tasks: TaskInput[]; depth_approval_token?: string
         }
         const content = await executeTeamTasksAdd(
           deps,
-          {
-            tasks: args.tasks.map((task) => ({
-              content: task.content,
-              priority: normalizePriority(task.priority),
-              ...(task.depends_on ? { depends_on: task.depends_on } : {}),
-            })),
-          },
+          args,
           context.sessionID,
         )
         return { content }

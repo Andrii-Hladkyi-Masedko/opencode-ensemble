@@ -154,7 +154,7 @@ describe("team_spawn", () => {
 
   test("claim_task atomically claims the task on the board and includes it in context", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Fix the login bug", priority: "high" },
+      { content: "Fix the login bug", priority: "high", depends_on: [] },
     ] }, "lead-sess")
     const taskId = addResult.match(/task_\S+/)![0]!
 

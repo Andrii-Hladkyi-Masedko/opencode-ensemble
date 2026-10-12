@@ -511,17 +511,19 @@ const plugin: Plugin = async (input) => {
       }),
 
       team_tasks_add: tool({
-        description: "Add tasks to the shared team task board so teammates can see what work is available and claim it.",
+        description: "Create tasks with explicit depends_on ([] for independent work) or lead-only review existing dependencies using task_id. Resolve depth overflow through the configured policy.",
         args: {
           tasks: tool.schema.array(tool.schema.object({
-            content: tool.schema.string().describe("Task description"),
-            priority: tool.schema.enum(["high", "medium", "low"]).default("medium").describe("Task priority"),
-            depends_on: tool.schema.array(tool.schema.string()).optional().describe("Task IDs this depends on"),
+            task_id: tool.schema.string().optional().describe("Existing task ID to review (lead only); omit to create"),
+            content: tool.schema.string().optional().describe("Task description; required on creation, preserved if omitted during review"),
+            priority: tool.schema.enum(["high", "medium", "low"]).optional().describe("Task priority; defaults to medium on creation"),
+            depends_on: tool.schema.array(tool.schema.string()).describe("Explicit prerequisites using real task IDs; [] means independent"),
           })).describe("Tasks to add"),
+          depth_approval_token: tool.schema.string().optional().describe("Depth preview token after real human approval"),
         },
         async execute(args, ctx) {
           const result = await executeTeamTasksAdd(deps, args, ctx.sessionID)
-          ctx.metadata({ title: `Added ${args.tasks.length} task${args.tasks.length !== 1 ? "s" : ""}` })
+          ctx.metadata({ title: result.startsWith("Depth overflow") ? "Dependency depth approval required" : `Recorded ${args.tasks.length} tasks` })
           return result
         },
       }),

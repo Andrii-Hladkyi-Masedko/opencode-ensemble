@@ -82,6 +82,17 @@ async function run(defs: V2ToolDef[], name: string, input: unknown, sessionID: s
 }
 
 describe("v2-tools (issue #36, DRY: same execute fns as V1)", () => {
+  test("task schemas require explicit dependencies and updates preserve omitted priority", async () => {
+    const deps = mockDeps(), { defs, domain } = mockToolDomain()
+    await registerV2Tools(domain, deps)
+    await run(defs, "team_create", { name: "strict" }, "lead")
+    await run(defs, "team_tasks_add", { tasks: [{ content: "existing", priority: "high", depends_on: [] }] }, "lead")
+    const task = deps.db.query("SELECT id FROM team_task").get() as { id: string }
+    await run(defs, "team_tasks_add", { tasks: [{ task_id: task.id, depends_on: [] }] }, "lead")
+    expect(deps.db.query("SELECT priority FROM team_task").get()).toEqual({ priority: "high" })
+    const schema = defs.find(d => d.name === "team_tasks_add")!.input as { properties: { tasks: { items: { required: string[] } } } }
+    expect(schema.properties.tasks.items.required).toContain("depends_on")
+  })
   test("all 14 tools register with descriptions and input schemas", async () => {
     const { defs, domain } = mockToolDomain()
     await registerV2Tools(domain, mockDeps())
@@ -101,7 +112,7 @@ describe("v2-tools (issue #36, DRY: same execute fns as V1)", () => {
     await run(
       defs,
       "team_tasks_add",
-      { tasks: [{ content: "do work" }] },
+      { tasks: [{ content: "do work", depends_on: [] }] },
       "ses_lead",
     )
     const list = await run(defs, "team_tasks_list", {}, "ses_lead")
@@ -138,7 +149,7 @@ describe("v2-tools (issue #36, DRY: same execute fns as V1)", () => {
     await run(defs, "team_create", { name: "alpha" }, "ses_lead")
     let error: unknown = null
     try {
-      await run(defs, "team_tasks_add", { tasks: [{ content: "x", priority: "urgent" }] }, "ses_lead")
+      await run(defs, "team_tasks_add", { tasks: [{ content: "x", priority: "urgent", depends_on: [] }] }, "ses_lead")
     } catch (err) {
       error = err
     }
