@@ -20,6 +20,18 @@ function contrastRatio(foreground: string, background: string): number {
 }
 
 describe("dashboard UI contract", () => {
+  test("graph overflow stays horizontal and no desktop or mobile rule caps its vertical extent", () => {
+    const rules = [...DASHBOARD_HEAD.matchAll(/\.graph-scroll\s*\{([^}]+)\}/g)]
+    expect(rules.length).toBeGreaterThan(0)
+    const declarations = rules.map(([, rule]) => Object.fromEntries(rule!.split(";").filter(Boolean).map(entry => entry.split(":").map(value => value.trim()))))
+    expect(declarations[0]?.["overflow-x"]).toBe("auto")
+    expect(declarations[0]?.["overflow-y"]).toBe("hidden")
+    declarations.forEach(rule => {
+      for (const key of ["height", "max-height", "block-size", "max-block-size"]) {
+        expect([undefined, "auto", "none"]).toContain(rule[key])
+      }
+    })
+  })
   test("dashboard exposes accessible overview and dependency graph tabs", () => {
     expect(DASHBOARD_HEAD).toContain('role="tablist"')
     expect(DASHBOARD_HEAD).toContain('id="tab-overview"')

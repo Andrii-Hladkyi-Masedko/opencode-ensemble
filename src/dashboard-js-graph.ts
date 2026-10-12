@@ -99,16 +99,17 @@ function graphMarkup(team,layout,selectedId,hideCompleted=false){
   const edges=layout.edges.map(edge=>{
     const from=nodes.get(edge.from),to=nodes.get(edge.to),done=from.task.status==='completed';
     const x1=from.x+GRAPH_CARD_WIDTH,y1=from.y+GRAPH_CARD_HEIGHT/2;
-    const forward=to.x>from.x,x2=forward?to.x:to.x+GRAPH_CARD_WIDTH,y2=forward?to.y+GRAPH_CARD_HEIGHT/2:to.y+16;
+    const forward=to.x>from.x,x2=forward?to.x-6:to.x+GRAPH_CARD_WIDTH+6,y2=forward?to.y+GRAPH_CARD_HEIGHT/2:to.y+16;
+    const landing=x2+(forward?-14:14);
     const bend=forward?(x1+x2)/2:x1+20;
     const skipsColumn=to.x-from.x>GRAPH_CARD_WIDTH+GRAPH_GAP_X;
     const routeY=layout.height+8+lane*12;
     if(skipsColumn)lane++;
     const path=skipsColumn?'M '+x1+' '+y1+' H '+(x1+24)+' V '+routeY+' H '+(x2-24)+' V '+y2+' H '+x2:
-      'M '+x1+' '+y1+' C '+bend+' '+y1+', '+bend+' '+y2+', '+x2+' '+y2;
+      'M '+x1+' '+y1+' C '+bend+' '+y1+', '+bend+' '+y2+', '+landing+' '+y2+' H '+x2;
     return '<path data-edge-from="'+E(edge.from)+'" data-edge-to="'+E(edge.to)+'" d="'+path+'" fill="none" stroke="'+(done?'#4ade80':'#64748b')+'" stroke-width="2" marker-end="url(#graph-arrow-'+(done?'done':'pending')+')"/>';
   }).join('');
-  const svg='<svg class="graph-edges" width="'+layout.width+'" height="'+height+'" aria-hidden="true"><defs>'+['done','pending'].map(name=>'<marker id="graph-arrow-'+name+'" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="'+(name==='done'?'#4ade80':'#64748b')+'"/></marker>').join('')+'</defs>'+edges+'</svg>';
+  const svg='<svg class="graph-edges" width="'+layout.width+'" height="'+height+'" aria-hidden="true"><defs>'+['done','pending'].map(name=>'<marker id="graph-arrow-'+name+'" viewBox="0 0 10 10" refX="10" refY="5" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" orient="auto"><path d="M0 0L10 5L0 10z" fill="'+(name==='done'?'#4ade80':'#64748b')+'"/></marker>').join('')+'</defs>'+edges+'</svg>';
   const cyclic=new Set(layout.cyclic),cards=layout.nodes.map(node=>graphCard(node,team,byId,selectedId,cyclic.has(node.task.id))).join('');
   return warning+'<div id="graph-scroll" class="graph-scroll scroll" tabindex="0" aria-label="Task dependency graph" aria-describedby="graph-description"><div class="graph-canvas" style="width:'+layout.width+'px;height:'+height+'px">'+svg+cards+'</div></div>'+
     '<div class="graph-legend"><span class="text-emerald-400">✓ Completed prerequisite</span><span class="text-blue-400">● In progress</span><span class="text-amber-400">○ Blocked</span><span>→ Dependency direction</span></div>'+graphDetail(team,byId,selectedId,hideCompleted);

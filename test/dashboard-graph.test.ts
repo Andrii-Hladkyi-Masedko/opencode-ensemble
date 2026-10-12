@@ -12,6 +12,32 @@ const member: Member = { name: "api-dev", agent: "build", status: "busy", execut
 const team = (tasks: Task[], members = [member]): Team => ({ id: "team-a", tasks, members })
 
 describe("dependency graph rendering", () => {
+  test("arrowheads stay compact instead of growing with connector stroke width", () => {
+    const html = markup(team([{ ...task("a"), status: "completed" }, task("b", ["a"]), task("c", ["b"])]))
+    const markers = [...html.matchAll(/<marker ([^>]+)>/g)]
+    expect(markers).toHaveLength(2)
+    markers.forEach(([, attributes]) => {
+      const width = Number(attributes!.match(/markerWidth="([\d.]+)"/)![1])
+      const scale = attributes!.includes('markerUnits="userSpaceOnUse"') ? 1 : 2
+      expect(width * scale).toBeLessThanOrEqual(10)
+    })
+  })
+  test.each([
+    { label: "adjacent columns", tasks: [task("a"), task("b", ["a"])], from: "a", to: "b", border: 392, side: 1 },
+    { label: "skipped columns", tasks: [task("a"), task("b", ["a"]), task("c", ["a", "b"])], from: "a", to: "c", border: 760, side: 1 },
+    { label: "cycle fallback", tasks: [task("a", ["b"]), task("b", ["a"])], from: "a", to: "b", border: 304, side: -1 },
+  ])("$label arrow tips land horizontally outside the target card border", ({ tasks, from, to, border, side }) => {
+    const html = markup(team([...tasks]))
+    const path = html.match(new RegExp(`data-edge-from="${from}" data-edge-to="${to}" d="([^"]+)"`))![1]!
+    const landing = path.match(/ H ([\d.]+)$/)
+    expect(landing).not.toBeNull()
+    const gap = side * (border - Number(landing![1]))
+    expect(gap).toBeGreaterThanOrEqual(4)
+    expect(gap).toBeLessThanOrEqual(10)
+    const numbers = path.match(/[\d.]+/g)!.map(Number)
+    const approachX = numbers.at(-3)!
+    expect(side * (Number(landing![1]) - approachX)).toBeGreaterThanOrEqual(12)
+  })
   test("hiding completed parents removes their cards/arrows but preserves child readiness and details", () => {
     const t = team([{ ...task("a"), status: "completed" }, task("b", ["a"]), { ...task("cancelled"), status: "cancelled" }])
     const html = markup(t, "b", true)

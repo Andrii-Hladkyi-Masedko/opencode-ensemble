@@ -41,6 +41,8 @@ Every task requires explicit `depends_on`: use `[]` for independent work, or
 real IDs returned by earlier calls for prerequisites. Every spawn requires a
 pending, unassigned `claim_task`, including scouts and read-only reviewers.
 Unresolved prerequisites block work; completed and cancelled prerequisites resolve it.
+New tasks may depend on `in_progress` tasks: they are recorded as blocked and become
+claimable when their prerequisites finish. The default four-level depth limit still applies.
 Follow-up work must be claimed before starting. Only a claimed in-progress task
 may be completed, after verification. The plugin enforces recording/ownership;
 it cannot prove a lead identified every genuine dependency or ran verification.
@@ -231,7 +233,8 @@ A real-time mission control dashboard runs at `http://localhost:4747` while Open
 - **Agent drawer** — full prompt, model, execution status, chat-style message history with markdown rendering
 - **Task board** — progress bar, collapsible status groups, dependency arrows
 - **Dependency graph tab** — task cards with agent ownership, prerequisite arrows,
-  dependency inspection, live updates, and missing/cyclic dependency warnings
+  dependency inspection, live updates, and missing/cyclic dependency warnings.
+  Tall graphs use the page scrollbar; wide graphs retain horizontal scrolling.
 - **Activity feed** — chat-style message bubbles with avatars, expandable with full markdown
 - **Timeline** — horizontal event strip showing spawns, messages, completions, shutdowns
 - **Keyboard shortcuts** — `j/k` navigate agents, `Enter` opens drawer, `Esc` closes, `?` shows help

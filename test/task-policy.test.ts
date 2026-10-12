@@ -3,6 +3,9 @@ import { setupDeps, insertTeam, insertMember } from "./helpers"
 import { executeTeamTasksAdd } from "../src/tools/team-tasks-add"
 import { readTaskNodes, authorizeDepth } from "../src/task-policy"
 import { inspectTaskGraph } from "../src/task-graph"
+import { executeTeamClaim } from "../src/tools/team-claim"
+import { executeTeamSpawn } from "../src/tools/team-spawn"
+import { executeTeamTasksComplete } from "../src/tools/team-tasks-complete"
 
 let deps: ReturnType<typeof setupDeps>
 beforeEach(() => { deps = setupDeps(); insertTeam(deps.db, "team", "alpha", "lead"); insertMember(deps.db, "team", "worker", "member") })
@@ -15,6 +18,35 @@ test("independent tasks persist an explicit empty declaration", async () => {
   await create("a")
   expect(readTaskNodes(deps.db, "team")[0]?.dependsOn).toEqual([])
   expect(deps.db.query("SELECT depends_on FROM team_task").get()).toEqual({ depends_on: "[]" })
+})
+test.each(["lead", "member"])("%s can create a task depending on in_progress work without prematurely starting it", async session => {
+  const parent = await add("running parent")
+  await executeTeamClaim(deps, { task_id: parent }, "member")
+  await executeTeamTasksAdd(deps, { tasks: [{ content: "follow-up", depends_on: [parent] }] }, session)
+  const child = readTaskNodes(deps.db, "team").find(task => task.content === "follow-up")!
+  expect(child).toMatchObject({ status: "blocked", assignee: null, dependsOn: [parent] })
+  expect(row(parent)).toMatchObject({ status: "in_progress", assignee: "worker" })
+  await expect(executeTeamClaim(deps, { task_id: child.id }, "member")).rejects.toThrow("blocked")
+  await expect(executeTeamSpawn(deps, { name: "next-worker", claim_task: child.id, prompt: "follow-up", worktree: false }, "lead")).rejects.toThrow("blocked")
+  expect(deps.client.calls.some(call => call.method === "session.create")).toBe(false)
+  await executeTeamTasksComplete(deps, { task_id: parent }, "member")
+  expect(row(child.id)).toMatchObject({ status: "pending", assignee: null })
+  await executeTeamClaim(deps, { task_id: child.id }, "member")
+  expect(row(child.id)).toMatchObject({ status: "in_progress", assignee: "worker" })
+})
+test("new follow-up chains on in_progress work fit four levels but cannot silently add a fifth", async () => {
+  const root = await add("running root")
+  await executeTeamClaim(deps, { task_id: root }, "member")
+  let parent = root
+  for (const content of ["level two", "level three", "level four"]) {
+    parent = await add(content, [parent])
+    expect(row(parent).status).toBe("blocked")
+  }
+  expect(inspectTaskGraph(readTaskNodes(deps.db, "team")).depth).toBe(4)
+  const preview = await create("level five", [parent])
+  expect(preview).toContain("depth 5 exceeds depth_limit 4")
+  expect(readTaskNodes(deps.db, "team")).toHaveLength(4)
+  expect(row(root)).toMatchObject({ status: "in_progress", assignee: "worker" })
 })
 test("missing and malformed declarations are rejected with zero writes", async () => {
   await expect(executeTeamTasksAdd(deps, { tasks: [{ content: "a" }] }, "lead")).rejects.toThrow("depends_on")
