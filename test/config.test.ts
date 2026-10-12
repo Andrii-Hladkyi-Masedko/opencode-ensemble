@@ -42,6 +42,35 @@ describe("config", () => {
     expect(config).toEqual(DEFAULT_CONFIG)
   })
 
+  test("depth policy defaults to four levels and user resolution", () => {
+    expect(loadConfig(tmpDir).depth_limit).toBe(4)
+    expect(loadConfig(tmpDir).depth_limit_overflow_action).toBe("user_resolve")
+  })
+
+  test("project depth settings override global settings", () => {
+    const globalDir = path.join(process.env.HOME!, ".config", "opencode")
+    const localDir = path.join(tmpDir, ".opencode")
+    mkdirSync(globalDir, { recursive: true }); mkdirSync(localDir, { recursive: true })
+    writeFileSync(path.join(globalDir, "ensemble.json"), JSON.stringify({ depth_limit: 7, depth_limit_overflow_action: "user_resolve" }))
+    writeFileSync(path.join(localDir, "ensemble.json"), JSON.stringify({ depth_limit: 2, depth_limit_overflow_action: "lead_resolve" }))
+    expect(loadConfig(tmpDir).depth_limit).toBe(2)
+    expect(loadConfig(tmpDir).depth_limit_overflow_action).toBe("lead_resolve")
+  })
+
+  test.each([0, -1, 1.5, null, "4", true, 1e100])("invalid supplied depth limits fail visibly (%p)", value => {
+    const dir = path.join(tmpDir, ".opencode"); mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, "ensemble.json"), JSON.stringify({ depth_limit: value }))
+    expect(() => loadConfig(tmpDir)).toThrow("depth_limit")
+  })
+
+  test("non-finite limits and unknown overflow actions fail visibly", () => {
+    const dir = path.join(tmpDir, ".opencode"); mkdirSync(dir, { recursive: true })
+    writeFileSync(path.join(dir, "ensemble.json"), '{"depth_limit":1e999}')
+    expect(() => loadConfig(tmpDir)).toThrow("depth_limit")
+    writeFileSync(path.join(dir, "ensemble.json"), '{"depth_limit_overflow_action":"ignore"}')
+    expect(() => loadConfig(tmpDir)).toThrow("depth_limit_overflow_action")
+  })
+
   test("project config overrides defaults", () => {
     const configDir = path.join(tmpDir, ".opencode")
     mkdirSync(configDir, { recursive: true })
