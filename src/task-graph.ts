@@ -5,6 +5,12 @@ export interface TaskNode { id: string; content: string; priority: string; statu
 /** Longest prerequisite chain and a canonical topology fingerprint. */
 export interface GraphReport { depth: number; chain: string[]; fingerprint: string }
 
+/** Fingerprint an existing recorded topology even when a candidate edit must repair it. */
+export function fingerprintTaskGraph(tasks: readonly TaskNode[]): string {
+  const canonical = [...tasks].sort((a, b) => a.id.localeCompare(b.id)).map(task => [task.id, task.dependsOn === null ? null : [...new Set(task.dependsOn)].sort()])
+  return createHash("sha256").update(JSON.stringify(canonical)).digest("hex")
+}
+
 function required<T>(values: Map<string, T>, id: string): T {
   const value = values.get(id)
   if (value === undefined) throw new Error(`Missing task state for "${id}"`)
@@ -50,8 +56,7 @@ export function inspectTaskGraph(tasks: readonly TaskNode[]): GraphReport {
   const chain: string[] = []
   let cursor = deepest
   while (cursor !== undefined) { chain.push(cursor); cursor = previous.get(cursor) }
-  const canonical = ordered.map(task => [task.id, task.dependsOn === null ? null : [...new Set(task.dependsOn)].sort()])
-  return { depth: deepest === undefined ? 0 : required(depths, deepest), chain: chain.reverse(), fingerprint: createHash("sha256").update(JSON.stringify(canonical)).digest("hex") }
+  return { depth: deepest === undefined ? 0 : required(depths, deepest), chain: chain.reverse(), fingerprint: fingerprintTaskGraph(ordered) }
 }
 /** Require an explicit declaration on the target and its ancestors. */
 export function requireDeclaredTask(tasks: readonly TaskNode[], taskId: string): TaskNode {

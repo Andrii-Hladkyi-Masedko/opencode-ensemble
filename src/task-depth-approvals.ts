@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto"
+import { resolve } from "node:path"
+import type { Database } from "./db"
+import { loadConfig } from "./config"
 
 /** Scope binding a human answer to one exact graph operation and policy. */
 export interface DepthScope { sessionId: string; teamId: string; operationKey: string; baseFingerprint: string; proposedFingerprint: string; depthLimit: number; action: "user_resolve" | "lead_resolve" }
 /** Human-facing challenge returned before an overflowing operation is applied. */
 export interface DepthChallenge { token: string; question: string; approvalLabel: string; denialLabel: string }
+/** Canonical project policy, shared by all tool instances serving a team's database. */
+export interface DepthPolicy { depth_limit: number; depth_limit_overflow_action: "user_resolve" | "lead_resolve" }
 interface Pending { scopeKey: string; sessionId: string; challenge: DepthChallenge; approved: boolean; created: number }
 
 function scopeKey(scope: DepthScope): string {
@@ -29,6 +34,8 @@ function hasChallenge(args: unknown, challenge: DepthChallenge): boolean {
 export class PendingTaskDepthApprovals {
   private pending = new Map<string, Pending>()
   private accepted = new Map<string, { fingerprint: string; limit: number }>()
+  private policySources = new Map<string, () => DepthPolicy>()
+  private seenPolicies = new Map<string, string>()
   constructor(private readonly ttlMs = 600_000, private readonly now: () => number = Date.now, private readonly createToken: () => string = randomUUID) {}
   /** Stage an operation for a real human answer. */
   create(scope: DepthScope, preview: string): DepthChallenge {
@@ -62,12 +69,45 @@ export class PendingTaskDepthApprovals {
   /** Check whether a topology is currently accepted. */
   isAccepted(teamId: string, fingerprint: string, depthLimit: number): boolean {
     const approved = this.accepted.get(teamId)
-    if (approved && (approved.fingerprint !== fingerprint || approved.limit !== depthLimit)) { this.accepted.delete(teamId); return false }
-    return approved !== undefined
+    if (approved && approved.limit !== depthLimit) { this.accepted.delete(teamId); return false }
+    return approved?.fingerprint === fingerprint
   }
   /** Expire an exception after a successful topology change. */
   invalidate(teamId: string): void { this.accepted.delete(teamId) }
+  /** Register the canonical location's live policy loader, never a worker's local override. */
+  setPolicySource(directory: string, source: () => DepthPolicy): void { this.policySources.set(directory, source) }
+  /** Resolve policy from the original team's location rather than the current worktree. */
+  policyForProject(directory: string): DepthPolicy | undefined { return this.policySources.get(directory)?.() }
+  /** Expire approval when a team observes an actual policy change. */
+  observePolicy(teamId: string, policy: DepthPolicy): void {
+    const key = JSON.stringify([policy.depth_limit, policy.depth_limit_overflow_action]), prior = this.seenPolicies.get(teamId)
+    if (prior !== undefined && prior !== key) this.invalidate(teamId)
+    this.seenPolicies.set(teamId, key)
+  }
+  /** A canonical-location reload clears its challenges and exceptions across workers. */
+  clearTeam(teamId: string): void {
+    this.invalidate(teamId); this.seenPolicies.delete(teamId)
+    this.pending.forEach((pending, token) => { if (JSON.parse(pending.scopeKey)[1] === teamId) this.pending.delete(token) })
+  }
   private prune(): void { this.pending.forEach((pending, token) => { if (this.now() - pending.created > this.ttlMs) this.pending.delete(token) }) }
+}
+
+const byDatabase = new WeakMap<Database, PendingTaskDepthApprovals>()
+const byPath = new Map<string, PendingTaskDepthApprovals>()
+/** Share runtime authority across connections to one SQLite file; isolated memory DBs stay isolated. */
+export function getTaskDepthApprovals(db: Database, databasePath?: string): PendingTaskDepthApprovals {
+  const key = databasePath && databasePath !== ":memory:" ? resolve(databasePath) : undefined
+  const existing = byDatabase.get(db) ?? (key ? byPath.get(key) : undefined)
+  const registry = existing ?? new PendingTaskDepthApprovals()
+  byDatabase.set(db, registry); if (key) byPath.set(key, registry)
+  return registry
+}
+
+/** Bind policy to its canonical location and expire that location's exceptions on reload. */
+export function configureDepthLocation(db: Database, registry: PendingTaskDepthApprovals, directory: string): void {
+  registry.setPolicySource(directory, () => loadConfig(directory))
+  const teams = db.query("SELECT id FROM team WHERE project_id=?").all(directory) as Array<{ id: string }>
+  teams.forEach(team => { registry.clearTeam(team.id) })
 }
 /** Feed only successful native question answers into the depth registry. */
 export function observeDepthQuestionAnswer(registry: PendingTaskDepthApprovals, sessionId: string, output: string, args: unknown, successful: boolean): void {

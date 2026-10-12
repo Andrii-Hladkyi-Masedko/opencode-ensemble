@@ -38,7 +38,7 @@ import { executeTeamView } from "./tools/team-view"
 import type { ToolDeps, } from "./types"
 import { TokenBucket } from "./rate-limit"
 import { Watchdog } from "./watchdog"
-import { PendingTaskDepthApprovals, observeDepthQuestionAnswer } from "./task-depth-approvals"
+import { getTaskDepthApprovals, configureDepthLocation, observeDepthQuestionAnswer } from "./task-depth-approvals"
 
 const DEFAULT_RATE_LIMIT_REFILL = 2
 const DEFAULT_RATE_LIMIT_INTERVAL_MS = 1000
@@ -62,7 +62,8 @@ const plugin: Plugin = async (input) => {
   const registry = new MemberRegistry()
   const tracker = new DescendantTracker()
   const purgeApprovals = new PendingPurgeApprovals()
-  const depthApprovals = new PendingTaskDepthApprovals()
+  const depthApprovals = getTaskDepthApprovals(db, dbPath)
+  configureDepthLocation(db, depthApprovals, input.directory)
   const nudgedMembers = new Set<string>()
   const progressTracker = new ProgressTracker()
   const activityBuffer = new ActivityBuffer()

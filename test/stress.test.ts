@@ -578,6 +578,8 @@ describe("stress: full lifecycle with all v0.8.0 features", () => {
 
     const fixtures = deps.db.query("SELECT id FROM team_task WHERE team_id=? AND id LIKE 'task_fixture_%'").all(teamId) as Array<{ id: string }>
     for (const fixture of fixtures) await executeTeamTasksComplete(deps, { task_id: fixture.id }, lead)
+    // Fixture completions precede the actual work, even when operations share a millisecond.
+    deps.db.run("UPDATE team_task SET time_updated=0 WHERE team_id=? AND id LIKE 'task_fixture_%'", [teamId])
     const tasks = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%' ORDER BY time_created").all(teamId) as Array<{ id: string }>
     await executeTeamClaim(deps, { task_id: tasks[0]!.id }, aliceSess)
     await executeTeamClaim(deps, { task_id: tasks[1]!.id }, bobSess)

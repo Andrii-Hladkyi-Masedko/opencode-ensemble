@@ -5,7 +5,7 @@ import { MemberRegistry, DescendantTracker, PendingPurgeApprovals } from "../src
 import type { ToolDeps, PluginClient } from "../src/types"
 import { DEFAULT_CONFIG } from "../src/config"
 import { ProgressTracker } from "../src/progress"
-import { PendingTaskDepthApprovals } from "../src/task-depth-approvals"
+import { getTaskDepthApprovals } from "../src/task-depth-approvals"
 import { executeTeamSpawn as runSpawn } from "../src/tools/team-spawn"
 import { randomUUID } from "node:crypto"
 
@@ -103,7 +103,7 @@ export function setupDeps(db?: EnsembleDatabase): ToolDeps & { client: ReturnTyp
     registry: new MemberRegistry(),
     tracker: new DescendantTracker(),
     purgeApprovals: new PendingPurgeApprovals(),
-    depthApprovals: new PendingTaskDepthApprovals(),
+    depthApprovals: getTaskDepthApprovals(d),
     client: mockClient(),
     directory: "/tmp/test-project",
     config: { ...DEFAULT_CONFIG },

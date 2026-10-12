@@ -22,7 +22,7 @@ import { startDashboard, type DashboardServer } from "./dashboard"
 import { EnsembleRpc, emitMemberEvent, emitNoticeEvent } from "./v2-rpc"
 import { isWorktreeInstance } from "./util"
 import { vlog } from "./log"
-import { PendingTaskDepthApprovals, observeDepthQuestionAnswer } from "./task-depth-approvals"
+import { getTaskDepthApprovals, configureDepthLocation, observeDepthQuestionAnswer, type PendingTaskDepthApprovals } from "./task-depth-approvals"
 
 /** V2 setup context subset (structural, mock-friendly). */
 export interface V2SetupContext {
@@ -100,7 +100,8 @@ export async function setupEnsemble(
   const registry: MemberRegistry = new MemberRegistryImpl()
   const tracker: DescendantTracker = new DescendantTrackerImpl()
   const purgeApprovals = new PendingPurgeApprovals()
-  const depthApprovals = new PendingTaskDepthApprovals()
+  const depthApprovals = getTaskDepthApprovals(db, options.dbPath ?? getDbPath())
+  configureDepthLocation(db, depthApprovals, ctx.location.directory)
   const activityBuffer = new ActivityBuffer()
   const progressTracker = new ProgressTracker()
   const nudgedMembers = new Set<string>()
@@ -268,7 +269,7 @@ export async function setupEnsemble(
       }
     }
     if (event.tool === "question") {
-      observeDepthQuestionAnswer(depthApprovals, event.sessionID, extractQuestionOutput(event.result), event.input, event.status === "success")
+      observeDepthQuestionAnswer(depthApprovals, event.sessionID, extractQuestionOutput(event.result), event.input, event.status === "completed")
       // Feed the answer text to purge approvals (team_cleanup confirm flow).
       // The question tool renders in every client, so this is the universal
       // approval channel on V2 — no forms or TUI needed.

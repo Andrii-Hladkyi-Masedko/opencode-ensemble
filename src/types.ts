@@ -4,6 +4,13 @@ import type { EnsembleConfig } from "./config"
 import type { ProgressTracker } from "./progress"
 import type { PendingTaskDepthApprovals } from "./task-depth-approvals"
 
+/** A session exists even though post-creation initialization failed; caller must roll it back. */
+export class SessionInitializationError extends Error {
+  constructor(readonly createdSessionId: string, cause: unknown) {
+    super(`Session initialization failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+  }
+}
+
 /**
  * Shared dependencies injected into every tool's execute function.
  * This avoids global state and makes tools testable with mocks.

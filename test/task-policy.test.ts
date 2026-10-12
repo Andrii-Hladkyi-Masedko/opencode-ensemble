@@ -109,3 +109,21 @@ test("approved tokens reject changed payload and changed graph snapshots", async
   await expect(executeTeamTasksAdd(deps, { ...request, depth_approval_token: q.token }, "lead")).rejects.toThrow("invalid")
   expect(readTaskNodes(deps.db, "team")).toHaveLength(2)
 })
+test("preview-only changes preserve acceptance of the unchanged committed graph", async () => {
+  deps.config.depth_limit = 1
+  const a = await add("a")
+  deps.db.run("INSERT INTO team_task (id,team_id,content,status,priority,depends_on,time_created,time_updated) VALUES ('b','team','b','pending','medium',?,0,0)", [JSON.stringify([a])])
+  const fingerprint = inspectTaskGraph(readTaskNodes(deps.db, "team")).fingerprint
+  deps.depthApprovals.accept("team", fingerprint, 1)
+  const preview = await create("independent")
+  expect(preview).toContain("Depth overflow")
+  expect(readTaskNodes(deps.db, "team")).toHaveLength(2)
+  expect(deps.depthApprovals.isAccepted("team", fingerprint, 1)).toBe(true)
+})
+test("lead can repair a legacy missing-reference graph without direct SQL intervention", async () => {
+  const a = await add("a")
+  deps.db.run("UPDATE team_task SET depends_on='[\"missing\"]' WHERE id=?", [a])
+  await executeTeamTasksAdd(deps, { tasks: [{ task_id: a, depends_on: [] }] }, "lead")
+  expect(row(a).dependsOn).toEqual([])
+  expect(row(a).status).toBe("pending")
+})

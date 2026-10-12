@@ -4,6 +4,9 @@ import { executeTeamSpawn, spawnFailures } from "../src/tools/team-spawn"
 import { executeTeamClaim } from "../src/tools/team-claim"
 import { executeTeamTasksComplete } from "../src/tools/team-tasks-complete"
 import { buildLeadSystemPrompt } from "../src/system-prompt"
+import { createV2Client } from "../src/v2-client"
+import { authorizeDepth, readTaskNodes } from "../src/task-policy"
+import { inspectTaskGraph } from "../src/task-graph"
 
 let deps: ReturnType<typeof setupDeps>
 beforeEach(() => { deps = setupDeps(); insertTeam(deps.db, "team", "alpha", "lead"); spawnFailures.clear() })
@@ -99,4 +102,66 @@ test("spawn overflow returns a preview with no session; real approval enables su
   deps.depthApprovals.recordQuestionAnswer("lead", `"Depth?"=${JSON.stringify(q.approvalLabel)}.`, { questions: [{ question: q.question, options: [{ label: q.approvalLabel }, { label: q.denialLabel }] }] })
   await executeTeamSpawn(deps, { ...request, depth_approval_token: q.token }, "lead")
   expect(row("e")).toEqual({ status: "in_progress", assignee: "worker" })
+})
+test("a late session-create result is aborted after timeout instead of becoming an orphan", async () => {
+  seed("task")
+  const old = process.env.SPAWN_TIMEOUT_MS; process.env.SPAWN_TIMEOUT_MS = "5"
+  let finish: (value: { data: { id: string } }) => void = () => {}
+  deps.client.session.create = () => new Promise(resolve => { finish = resolve })
+  try {
+    await expect(spawn("worker", "task")).rejects.toThrow("timed out")
+    finish({ data: { id: "late-session" } })
+    await new Promise(resolve => setTimeout(resolve, 20))
+    expect(deps.client.calls.filter(c => c.method === "session.abort").map(c => c.args[0])).toContainEqual({ sessionID: "late-session" })
+    expect(row("task")).toEqual({ status: "pending", assignee: null })
+  } finally { if (old === undefined) delete process.env.SPAWN_TIMEOUT_MS; else process.env.SPAWN_TIMEOUT_MS = old }
+})
+test("permission setup failure after native V2 session creation is rolled back", async () => {
+  seed("task")
+  const interrupted: string[] = []
+  const client = createV2Client({ session: {
+    create: async () => ({ id: "created-session" }), prompt: async () => ({}), synthetic: async () => ({}),
+    switchAgent: async () => {}, switchModel: async () => {}, interrupt: async ({ sessionID }) => { interrupted.push(String(sessionID)) },
+    get: async () => ({}), context: async () => [], active: async () => ({}),
+  }, permission: { rules: async () => { throw new Error("permission failed") } }, worktree: {
+    create: async () => ({ directory: "/unused" }), remove: async () => {}, list: async () => [], refresh: async () => {},
+  } })
+  deps.client.session = client.session
+  await expect(spawn("worker", "task")).rejects.toThrow("permission failed")
+  expect(interrupted).toEqual(["created-session"])
+  expect(row("task")).toEqual({ status: "pending", assignee: null })
+})
+test("worktree tool instances cannot bypass the lead's stricter canonical depth policy", async () => {
+  seed("a", [], "completed"); seed("b", ["a"])
+  deps.config.depth_limit = 1; deps.config.depth_limit_overflow_action = "lead_resolve"
+  const nodes = readTaskNodes(deps.db, "team"), fingerprint = inspectTaskGraph(nodes).fingerprint
+  expect(() => authorizeDepth(deps, "lead", "team", nodes, "check", fingerprint)).toThrow("lead_resolve")
+  const worker = setupDeps(deps.db); worker.directory = "/worktrees/worker"
+  insertMember(deps.db, "team", "worker", "worker-session")
+  await expect(executeTeamClaim(worker, { task_id: "b" }, "worker-session")).rejects.toThrow("depth 2")
+  expect(row("b")).toEqual({ status: "pending", assignee: null })
+})
+test("worktree workers can claim follow-up tasks on the lead's accepted unchanged topology", async () => {
+  seed("a", [], "completed"); seed("b", ["a"], "completed"); seed("c", ["b"], "completed"); seed("d", ["c"], "completed"); seed("e", ["d"])
+  const nodes = readTaskNodes(deps.db, "team"), fingerprint = inspectTaskGraph(nodes).fingerprint
+  deps.depthApprovals.accept("team", fingerprint, 4)
+  const worker = setupDeps(deps.db); worker.directory = "/worktrees/worker"
+  insertMember(deps.db, "team", "worker", "worker-session")
+  await executeTeamClaim(worker, { task_id: "e" }, "worker-session")
+  expect(row("e")).toEqual({ status: "in_progress", assignee: "worker" })
+})
+test.each(["worktree", "workspace"])("late %s creation is removed without affecting the tracked fallback worker", async kind => {
+  seed("task")
+  const old = process.env.SPAWN_TIMEOUT_MS; process.env.SPAWN_TIMEOUT_MS = "5"
+  let finish: () => void = () => {}
+  if (kind === "worktree") deps.client.worktree.create = () => new Promise(resolve => { finish = () => resolve({ data: { name: "late", branch: "late-branch", directory: "/late-worktree" } }) })
+  else deps.client.workspace.create = () => new Promise(resolve => { finish = () => resolve({ data: { id: "late-workspace", type: "worktree", branch: null, directory: null, projectID: "proj" } }) })
+  try {
+    await executeTeamSpawn(deps, { name: "worker", claim_task: "task", prompt: "work", worktree: true }, "lead")
+    finish()
+    const method = `${kind}.remove`, deadline = Date.now() + 1000
+    while (!deps.client.calls.some(call => call.method === method) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10))
+    expect(deps.client.calls.some(call => call.method === method)).toBe(true)
+    expect(row("task")).toEqual({ status: "in_progress", assignee: "worker" })
+  } finally { if (old === undefined) delete process.env.SPAWN_TIMEOUT_MS; else process.env.SPAWN_TIMEOUT_MS = old }
 })

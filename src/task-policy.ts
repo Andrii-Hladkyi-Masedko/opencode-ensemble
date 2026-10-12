@@ -1,6 +1,18 @@
 import type { Database } from "./db"
 import type { ToolDeps } from "./types"
 import { inspectTaskGraph, type TaskNode } from "./task-graph"
+import { loadConfig } from "./config"
+import type { DepthPolicy } from "./task-depth-approvals"
+
+/** Use the team's canonical project settings even when a tool runs in a worker location. */
+export function teamDepthPolicy(deps: ToolDeps, teamId: string): DepthPolicy {
+  const team = deps.db.query("SELECT project_id FROM team WHERE id=?").get(teamId) as { project_id: string } | null
+  if (!team) throw new Error("Team not found while resolving depth policy")
+  if (!deps.depthApprovals.policyForProject(team.project_id) && team.project_id === deps.directory) deps.depthApprovals.setPolicySource(team.project_id, () => deps.config)
+  const policy = deps.depthApprovals.policyForProject(team.project_id) ?? loadConfig(team.project_id)
+  deps.depthApprovals.observePolicy(teamId, policy)
+  return policy
+}
 /** Read canonical, team-scoped task topology. */
 export function readTaskNodes(db: Database, teamId: string): TaskNode[] {
   const rows = db.query("SELECT id,content,priority,status,assignee,depends_on FROM team_task WHERE team_id=? ORDER BY time_created,id").all(teamId) as Array<{ id: string; content: string; priority: string; status: string; assignee: string | null; depends_on: string | null }>
@@ -15,7 +27,8 @@ export function readTaskNodes(db: Database, teamId: string): TaskNode[] {
 export type DepthDecision = { allowed: true; approveTopology: boolean } | { allowed: false; preview: string }
 /** Authorize one operation against the current or proposed topology. */
 export function authorizeDepth(deps: ToolDeps, sessionId: string, teamId: string, tasks: readonly TaskNode[], operationKey: string, baseFingerprint: string, token?: string, allowChallenge = true): DepthDecision {
-  const report = inspectTaskGraph(tasks), limit = deps.config.depth_limit, action = deps.config.depth_limit_overflow_action
+  const policy = teamDepthPolicy(deps, teamId)
+  const report = inspectTaskGraph(tasks), limit = policy.depth_limit, action = policy.depth_limit_overflow_action
   const summary = `Depth overflow: depth ${report.depth} exceeds depth_limit ${limit}. Chain: ${report.chain.map(id => `${tasks.find(t => t.id === id)?.content ?? id} (${id})`).join(" → ")}`
   if (action === "lead_resolve" && token) throw new Error("depth_approval_token cannot bypass lead_resolve; restructure genuine dependencies")
   if (token) {

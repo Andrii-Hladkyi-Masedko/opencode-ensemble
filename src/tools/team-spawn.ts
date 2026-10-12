@@ -1,4 +1,5 @@
 import type { ToolDeps, PermissionRule } from "../types"
+import { SessionInitializationError } from "../types"
 import { validateMemberName } from "../util"
 import { requireLead } from "./shared"
 import { claimTask, releaseTaskReservation } from "./team-claim"
@@ -8,7 +9,7 @@ import { log } from "../log"
 import type { EnsembleConfig } from "../config"
 import { getTeamResourceParts, teamWorktreeName, preserveBranch, preservedBranchName } from "./merge-helper"
 import { inspectTaskGraph, requireDeclaredTask } from "../task-graph"
-import { readTaskNodes, authorizeDepth } from "../task-policy"
+import { readTaskNodes, authorizeDepth, teamDepthPolicy } from "../task-policy"
 
 /** Tracks consecutive spawn failures per team for circuit breaker. */
 export const spawnFailures = new Map<string, { count: number; lastError: string }>()
@@ -46,12 +47,19 @@ function isWorktreeDirectory(dir: string): boolean {
 }
 
 /** Race a promise against a timeout. Throws if the timeout fires first. Cleans up timer on resolution. */
-function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string, late?: (result: T) => Promise<void>, lateError?: (error: unknown) => Promise<void>): Promise<T> {
   let timer: ReturnType<typeof setTimeout>
+  let expired = false
   return Promise.race([
-    promise.finally(() => clearTimeout(timer)),
+    promise.then(result => {
+      if (expired && late) void late(result).catch(error => log(`spawn:late-cleanup:failed ${String(error)}`))
+      return result
+    }, error => {
+      if (expired && lateError) void lateError(error).catch(failure => log(`spawn:late-cleanup:failed ${String(failure)}`))
+      throw error
+    }).finally(() => clearTimeout(timer)),
     new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+      timer = setTimeout(() => { expired = true; reject(new Error(`${label} timed out after ${ms}ms`)) }, ms)
     }),
   ])
 }
@@ -84,7 +92,7 @@ export async function executeTeamSpawn(deps: ToolDeps, args: SpawnArgs, sessionI
   const { depth_approval_token: token, ...operation } = args
   const decision = authorizeDepth(deps, sessionId, team.teamId, nodes, JSON.stringify(["spawn", operation]), base.fingerprint, token)
   if (!decision.allowed) return decision.preview
-  if (decision.approveTopology) deps.depthApprovals.accept(team.teamId, base.fingerprint, deps.config.depth_limit)
+  if (decision.approveTopology) deps.depthApprovals.accept(team.teamId, base.fingerprint, teamDepthPolicy(deps, team.teamId).depth_limit)
   const content = claimTask(deps, team.teamId, task.id, args.name, true)
   const resources: SpawnResources = {}
   try { return await spawnReserved(deps, args, sessionId, content, resources) }
@@ -147,7 +155,11 @@ async function spawnReserved(
       log(`spawn:worktree:start name=${args.name}`)
       const result = await withTimeout(
         deps.client.worktree.create({ worktreeCreateInput: { name: worktreeName } }),
-        getSpawnTimeout(), `worktree.create for "${args.name}"`
+        getSpawnTimeout(), `worktree.create for "${args.name}"`, async late => {
+          if (!late.data) return
+          await preserveSpawnBranch(deps, teamInfo.teamId, args.name, late.data.branch)
+          await deps.client.worktree.remove({ worktreeRemoveInput: { directory: late.data.directory } })
+        }
       )
       if (result.data) {
         worktreeDir = result.data.directory
@@ -176,7 +188,11 @@ async function spawnReserved(
       log(`spawn:workspace:start name=${args.name}`)
       const wsResult = await withTimeout(
         deps.client.workspace.create({ branch: worktreeBranch }),
-        getSpawnTimeout(), `workspace.create for "${args.name}"`
+        getSpawnTimeout(), `workspace.create for "${args.name}"`, async late => {
+          if (!late.data) return
+          await preserveSpawnBranch(deps, teamInfo.teamId, args.name, worktreeBranch ?? undefined)
+          await deps.client.workspace.remove({ id: late.data.id })
+        }
       )
       if (wsResult.data) {
         workspaceId = wsResult.data.id
@@ -247,13 +263,22 @@ async function spawnReserved(
         permission,
         ...(workspaceId ? { workspaceID: workspaceId } : {}),
       }),
-      getSpawnTimeout(), `session.create for "${args.name}"`
+      getSpawnTimeout(), `session.create for "${args.name}"`, async late => {
+        if (!late.data?.id) return
+        await preserveSpawnBranch(deps, teamInfo.teamId, args.name, worktreeBranch ?? undefined)
+        await deps.client.session.abort({ sessionID: late.data.id })
+      }, async error => {
+        if (!(error instanceof SessionInitializationError)) return
+        await preserveSpawnBranch(deps, teamInfo.teamId, args.name, worktreeBranch ?? undefined)
+        await deps.client.session.abort({ sessionID: error.createdSessionId })
+      }
     )
     childSessionId = createResult.data?.id
     resources.session = childSessionId
     log(`spawn:session:done name=${args.name} sessionId=${childSessionId}`)
   } catch (err) {
     log(`spawn:session:failed name=${args.name} err=${err instanceof Error ? err.message : String(err)}`)
+    if (err instanceof SessionInitializationError) resources.session = err.createdSessionId
     // Track failure for circuit breaker
     const errMsg = err instanceof Error ? err.message : String(err)
     const prev = spawnFailures.get(teamInfo.teamId)

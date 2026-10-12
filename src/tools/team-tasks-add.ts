@@ -1,8 +1,8 @@
 import type { ToolDeps } from "../types"
 import { requireTeamMember } from "./shared"
 import { generateId } from "../util"
-import { inspectTaskGraph, requireDeclaredTask, type TaskNode } from "../task-graph"
-import { authorizeDepth, readTaskNodes } from "../task-policy"
+import { inspectTaskGraph, requireDeclaredTask, fingerprintTaskGraph, type TaskNode } from "../task-graph"
+import { authorizeDepth, readTaskNodes, teamDepthPolicy } from "../task-policy"
 
 /** A creation or lead-only dependency review of an existing task. */
 export interface TaskInput { task_id?: string; content?: string; priority?: string; depends_on?: string[] }
@@ -21,7 +21,7 @@ export async function executeTeamTasksAdd(deps: ToolDeps, args: { tasks: TaskInp
     return { ...input, depends_on: [...new Set(input.depends_on)].sort() }
   })
   const result = deps.db.transaction(() => {
-    const original = readTaskNodes(deps.db, team.teamId), base = inspectTaskGraph(original)
+    const original = readTaskNodes(deps.db, team.teamId), base = { fingerprint: fingerprintTaskGraph(original) }
     const originalMap = new Map(original.map(task => [task.id, task])), candidate = new Map(original.map(task => [task.id, { ...task }]))
     const changed = new Set<string>()
     const drafts = normalized.map((input, index) => {
@@ -63,7 +63,7 @@ export async function executeTeamTasksAdd(deps: ToolDeps, args: { tasks: TaskInp
   })()
   if (result.fingerprint) {
     if (result.fingerprint !== result.oldFingerprint) deps.depthApprovals.invalidate(team.teamId)
-    if (result.approve) deps.depthApprovals.accept(team.teamId, result.fingerprint, deps.config.depth_limit)
+    if (result.approve) deps.depthApprovals.accept(team.teamId, result.fingerprint, teamDepthPolicy(deps, team.teamId).depth_limit)
   }
   return result.text
 }
