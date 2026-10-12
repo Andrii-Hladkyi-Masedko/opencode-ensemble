@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { setupDeps, insertTeam, insertMember } from "./helpers"
 import { executeTeamCreate } from "../src/tools/team-create"
-import { executeTeamSpawn } from "../src/tools/team-spawn"
+import { spawnWithRecordedTask as executeTeamSpawn } from "./helpers"
 import { spawnFailures } from "../src/tools/team-spawn"
 import { executeTeamMessage } from "../src/tools/team-message"
 import { executeTeamShutdown } from "../src/tools/team-shutdown"
@@ -405,11 +405,11 @@ describe("stress: system prompt inline tasks + compaction", () => {
 
     // Add tasks and complete one
     await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Fix auth middleware", priority: "high" },
-      { content: "Add rate limiting", priority: "medium" },
+      { content: "Fix auth middleware", priority: "high", depends_on: [] },
+      { content: "Add rate limiting", priority: "medium", depends_on: [] },
     ] }, w1Sess)
 
-    const tasks = deps.db.query("SELECT id FROM team_task WHERE team_id = ?").all(teamId) as Array<{ id: string }>
+    const tasks = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%'").all(teamId) as Array<{ id: string }>
     await executeTeamClaim(deps, { task_id: tasks[0]!.id }, w1Sess)
     await executeTeamTasksComplete(deps, { task_id: tasks[0]!.id }, w1Sess)
     await executeTeamClaim(deps, { task_id: tasks[1]!.id }, w1Sess)
@@ -430,8 +430,8 @@ describe("stress: system prompt inline tasks + compaction", () => {
     const wSess = getSession(deps, "w")
 
     const longContent = "x".repeat(200)
-    await executeTeamTasksAdd(deps, { tasks: [{ content: longContent, priority: "high" }] }, wSess)
-    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ?").get(teamId) as { id: string }
+    await executeTeamTasksAdd(deps, { tasks: [{ content: longContent, priority: "high", depends_on: [] }] }, wSess)
+    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%'").get(teamId) as { id: string }
     await executeTeamClaim(deps, { task_id: task.id }, wSess)
 
     const prompt = buildLeadSystemPrompt(deps.db, teamId)
@@ -468,8 +468,8 @@ describe("stress: system prompt inline tasks + compaction", () => {
     await executeTeamSpawn(deps, { name: "w", agent: "build", prompt: "t", worktree: false }, lead)
     const wSess = getSession(deps, "w")
 
-    await executeTeamTasksAdd(deps, { tasks: [{ content: "Setup database", priority: "high" }] }, wSess)
-    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ?").get(teamId) as { id: string }
+    await executeTeamTasksAdd(deps, { tasks: [{ content: "Setup database", priority: "high", depends_on: [] }] }, wSess)
+    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%'").get(teamId) as { id: string }
     await executeTeamClaim(deps, { task_id: task.id }, wSess)
     await executeTeamTasksComplete(deps, { task_id: task.id }, wSess)
 
@@ -497,10 +497,12 @@ describe("stress: richer team_status output", () => {
     await executeTeamSpawn(deps, { name: "alice", agent: "build", prompt: "t", worktree: false }, lead)
     const aliceSess = getSession(deps, "alice")
 
-    // Alice sends a message and claims a task
+    const initialTask = deps.db.query("SELECT id FROM team_task WHERE team_id=? AND assignee='alice' AND status='in_progress'").get(teamId) as { id: string }
+    await executeTeamTasksComplete(deps, { task_id: initialTask.id }, aliceSess)
+    // Alice sends a message and claims a follow-up task
     await executeTeamMessage(deps, { to: "lead", text: "progress update" }, aliceSess)
-    await executeTeamTasksAdd(deps, { tasks: [{ content: "Fix the login page", priority: "high" }] }, aliceSess)
-    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ?").get(teamId) as { id: string }
+    await executeTeamTasksAdd(deps, { tasks: [{ content: "Fix the login page", priority: "high", depends_on: [] }] }, aliceSess)
+    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%'").get(teamId) as { id: string }
     await executeTeamClaim(deps, { task_id: task.id }, aliceSess)
 
     const result = await executeTeamStatus(deps, lead)
@@ -526,8 +528,10 @@ describe("stress: richer team_status output", () => {
     const wSess = getSession(deps, "w")
 
     const longTask = "a".repeat(120)
-    await executeTeamTasksAdd(deps, { tasks: [{ content: longTask, priority: "high" }] }, wSess)
-    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ?").get(teamId) as { id: string }
+    const initialTask = deps.db.query("SELECT id FROM team_task WHERE team_id=? AND assignee='w' AND status='in_progress'").get(teamId) as { id: string }
+    await executeTeamTasksComplete(deps, { task_id: initialTask.id }, wSess)
+    await executeTeamTasksAdd(deps, { tasks: [{ content: longTask, priority: "high", depends_on: [] }] }, wSess)
+    const task = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%'").get(teamId) as { id: string }
     await executeTeamClaim(deps, { task_id: task.id }, wSess)
 
     lastCallTime.clear()
@@ -567,12 +571,16 @@ describe("stress: full lifecycle with all v0.8.0 features", () => {
     const carolSess = getSession(deps, "carol")
 
     await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Implement auth", priority: "high" },
-      { content: "Write tests", priority: "medium" },
-      { content: "Update docs", priority: "low" },
+      { content: "Implement auth", priority: "high", depends_on: [] },
+      { content: "Write tests", priority: "medium", depends_on: [] },
+      { content: "Update docs", priority: "low", depends_on: [] },
     ] }, aliceSess)
 
-    const tasks = deps.db.query("SELECT id FROM team_task WHERE team_id = ? ORDER BY time_created").all(teamId) as Array<{ id: string }>
+    const fixtures = deps.db.query("SELECT id FROM team_task WHERE team_id=? AND id LIKE 'task_fixture_%'").all(teamId) as Array<{ id: string }>
+    for (const fixture of fixtures) await executeTeamTasksComplete(deps, { task_id: fixture.id }, lead)
+    // Fixture completions precede the actual work, even when operations share a millisecond.
+    deps.db.run("UPDATE team_task SET time_updated=0 WHERE team_id=? AND id LIKE 'task_fixture_%'", [teamId])
+    const tasks = deps.db.query("SELECT id FROM team_task WHERE team_id = ? AND id NOT LIKE 'task_fixture_%' ORDER BY time_created").all(teamId) as Array<{ id: string }>
     await executeTeamClaim(deps, { task_id: tasks[0]!.id }, aliceSess)
     await executeTeamClaim(deps, { task_id: tasks[1]!.id }, bobSess)
     await executeTeamClaim(deps, { task_id: tasks[2]!.id }, carolSess)

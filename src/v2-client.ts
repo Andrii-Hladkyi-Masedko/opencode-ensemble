@@ -1,4 +1,5 @@
 import type { PluginClient } from "./types"
+import { SessionInitializationError } from "./types"
 import { runCommand } from "./process"
 
 /** V2 plugin context subset Ensemble needs (structural, mock-friendly). */
@@ -119,7 +120,8 @@ export function createV2Client(ctx: V2Context, deps: V2ClientDeps = {}): PluginC
           // and agent rules apply later), which strips team tools from
           // read-only agents. Re-assert here: rules() evaluates after the
           // agent's rules, restoring the tools. OQ-V2-rules.
-          await ctx.permission.rules({ sessionID: created.id, permissions })
+          try { await ctx.permission.rules({ sessionID: created.id, permissions }) }
+          catch (error) { throw new SessionInitializationError(created.id, error) }
         }
         return { data: { id: created.id } }
       },

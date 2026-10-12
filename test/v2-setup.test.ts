@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test"
 import { setupEnsemble, extractQuestionOutput, type V2SetupContext } from "../src/v2-setup"
+import type { DepthScope } from "../src/task-depth-approvals"
+import { mkdtempSync, rmSync } from "node:fs"
+import { join } from "node:path"
+import { tmpdir } from "node:os"
 /** Mock V2 setup context: hook registry + programmable event intake. */
 function mockSetupCtx() {
   const hooks: Record<string, Array<(event: never) => unknown>> = {}
@@ -62,6 +66,37 @@ function seedLeadAndMember(handle: Awaited<ReturnType<typeof setupEnsemble>>) { 
 }
 
 describe("v2-setup (issue #36)", () => {
+  test("file-backed location instances share approval authority and canonical reload expires it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "depth-runtime-")), dbPath = join(dir, "team.db")
+    const lead = mockSetupCtx().ctx, worker = mockSetupCtx().ctx
+    lead.location.directory = dir; worker.location.directory = join(dir, "worker")
+    const first = await setupEnsemble(lead, { dbPath, dashboardPort: 0 })
+    first.db.run("INSERT INTO project (id,name,path,status,time_created,time_updated) VALUES (?,?,?,'active',0,0)", [dir, "project", dir])
+    first.db.run("INSERT INTO team (id,name,project_id,lead_session_id,status,time_created,time_updated) VALUES ('shared','shared',?,'lead','active',0,0)", [dir])
+    first.depthApprovals.accept("shared", "topology", 4)
+    const second = await setupEnsemble(worker, { dbPath, dashboardPort: 0 })
+    let reloaded: Awaited<ReturnType<typeof setupEnsemble>> | undefined
+    try {
+      expect(second.depthApprovals.isAccepted("shared", "topology", 4)).toBe(true)
+      reloaded = await setupEnsemble(lead, { dbPath, dashboardPort: 0 })
+      expect(second.depthApprovals.isAccepted("shared", "topology", 4)).toBe(false)
+    } finally {
+      await first.dispose(); await second.dispose(); await reloaded?.dispose()
+      first.db.close(); second.db.close(); reloaded?.db.close(); rmSync(dir, { recursive: true, force: true })
+    }
+  })
+  test("only successful real question answers authorize depth overflow", async () => {
+    const { ctx, hooks } = mockSetupCtx()
+    const handle = await setupEnsemble(ctx, { dbPath: ":memory:", dashboardPort: 0 })
+    const scope: DepthScope = { sessionId: "lead", teamId: "team", operationKey: "op", baseFingerprint: "base", proposedFingerprint: "new", depthLimit: 4, action: "user_resolve" }
+    const challenge = handle.depthApprovals.create(scope, "Limit 4; depth 5")
+    const event = { tool: "question", sessionID: "lead", status: "error", input: { questions: [{ question: challenge.question, options: [{ label: challenge.approvalLabel }, { label: challenge.denialLabel }] }] }, result: { content: `User has answered your questions: "Depth?"=${JSON.stringify(challenge.approvalLabel)}.` } }
+    await hooks.tool?.[1]?.(event as never)
+    expect(() => handle.depthApprovals.consume(scope, challenge.token)).toThrow("approved")
+    await hooks.tool?.[1]?.({ ...event, status: "completed" } as never)
+    expect(() => handle.depthApprovals.consume(scope, challenge.token)).not.toThrow()
+    await handle.dispose()
+  })
   test("dispatched status events flow to member state", async () => {
     const { ctx } = mockSetupCtx()
     const handle = await setupEnsemble(ctx, { dbPath: ":memory:", dashboardPort: 0 })

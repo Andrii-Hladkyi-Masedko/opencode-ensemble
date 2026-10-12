@@ -109,7 +109,7 @@ select{-webkit-appearance:none;appearance:none;background-image:url("data:image/
 </div>
 </div>
 <section id="panel-dependencies" role="tabpanel" aria-labelledby="tab-dependencies" class="dashboard-panel" hidden>
-<div class="graph-toolbar"><div><h2 class="text-[14px] font-semibold">Task dependencies</h2><p id="graph-description" class="text-[11px] text-txt-400 mt-1">Prerequisite → dependent · Select a task to inspect its agent and dependencies</p></div><button type="button" id="graph-reset" class="text-[11px] text-txt-300 border border-base-700 rounded px-2 py-1">Reset view</button></div>
+<div class="graph-toolbar"><div><h2 class="text-[14px] font-semibold">Task dependencies</h2><p id="graph-description" class="text-[11px] text-txt-400 mt-1">Prerequisite → dependent · Select a task to inspect its agent and dependencies</p></div><div class="flex items-center gap-3"><label class="flex items-center gap-2 text-[11px] text-txt-300" for="graph-hide-completed"><input id="graph-hide-completed" type="checkbox">Hide completed tasks</label><button type="button" id="graph-reset" class="text-[11px] text-txt-300 border border-base-700 rounded px-2 py-1">Reset view</button></div></div>
 <div id="graph-content">
 <div id="graph-scroll" class="graph-scroll scroll" tabindex="0" aria-label="Task dependency graph" aria-describedby="graph-description"></div>
 <div class="graph-legend"><span class="text-emerald-400">✓ Completed prerequisite</span><span class="text-blue-400">● In progress</span><span class="text-amber-400">○ Blocked</span><span>→ Dependency direction</span></div>

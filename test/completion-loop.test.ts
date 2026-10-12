@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from "bun:test"
 import { setupDeps, insertTeam, insertMember } from "./helpers"
 import { executeTeamCreate } from "../src/tools/team-create"
-import { executeTeamSpawn } from "../src/tools/team-spawn"
+import { spawnWithRecordedTask as executeTeamSpawn } from "./helpers"
 import { executeTeamMessage } from "../src/tools/team-message"
 import { handleSessionStatusEvent } from "../src/hooks"
 import { hasReportedCompletion } from "../src/messaging"

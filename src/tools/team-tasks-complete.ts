@@ -10,7 +10,7 @@ import { log } from "../log"
  * - Rejects completing an already-completed or cancelled task.
  * - Rejects completing a blocked task (dependencies must resolve first).
  * - Only the assignee (or the lead) may complete a claimed task.
- * - Completing an unclaimed task attributes it to the caller atomically.
+ * - Rejects unclaimed tasks; claims must precede verified completion.
  */
 export async function executeTeamTasksComplete(
   deps: ToolDeps,
@@ -26,23 +26,14 @@ export async function executeTeamTasksComplete(
   if (task.status === "completed") throw new Error(`Task "${args.task_id}" is already completed`)
   if (task.status === "cancelled") throw new Error(`Task "${args.task_id}" was cancelled`)
   if (task.status === "blocked") throw new Error(`Task "${args.task_id}" is blocked by unresolved dependencies`)
+  if (task.status !== "in_progress" || !task.assignee) throw new Error(`Task "${args.task_id}" must be claimed before completion`)
   if (task.status === "in_progress" && task.assignee && teamInfo.role !== "lead" && caller !== task.assignee) {
     throw new Error(`Task "${args.task_id}" is claimed by ${task.assignee}`)
   }
 
   const now = Date.now()
-  if (task.assignee) {
-    deps.db.run("UPDATE team_task SET status = 'completed', time_updated = ? WHERE id = ?", [now, args.task_id])
-  } else {
-    // Attribute an unclaimed task to the caller so the board reflects who did it.
-    const result = deps.db.run(
-      "UPDATE team_task SET status = 'completed', assignee = ?, time_updated = ? WHERE id = ? AND assignee IS NULL",
-      [caller, now, args.task_id]
-    )
-    if (result.changes === 0) {
-      throw new Error(`Task "${args.task_id}" was just completed by another teammate`)
-    }
-  }
+  const result = deps.db.run("UPDATE team_task SET status = 'completed', time_updated = ? WHERE id = ? AND team_id=? AND status='in_progress' AND assignee=?", [now, args.task_id, teamInfo.teamId, task.assignee])
+  if (!result.changes) throw new Error(`Task "${args.task_id}" changed while completing`)
 
   // Unblock dependent tasks
   const allTasks = deps.db.query("SELECT id, depends_on, status FROM team_task WHERE team_id = ?")

@@ -3,6 +3,10 @@ import path from "node:path"
 
 /** Plugin configuration shape. All fields optional — defaults applied. */
 export interface EnsembleConfig {
+  /** Maximum recorded prerequisite-chain depth; roots count as one. */
+  depth_limit?: number
+  /** Resolve overflow through user approval or lead replanning. */
+  depth_limit_overflow_action?: "user_resolve" | "lead_resolve"
   /** Auto-merge worktree branches on cleanup (default: true) */
   mergeOnCleanup?: boolean
   /** Stall detection threshold in ms (default: 180000 = 3 min, 0 to disable) */
@@ -35,6 +39,8 @@ export interface EnsembleConfig {
 
 /** Default configuration values. */
 export const DEFAULT_CONFIG: Required<EnsembleConfig> = {
+  depth_limit: 4,
+  depth_limit_overflow_action: "user_resolve",
   mergeOnCleanup: true,
   stallThresholdMs: 300_000,
   stallMinSteps: 5,
@@ -51,13 +57,27 @@ export const DEFAULT_CONFIG: Required<EnsembleConfig> = {
   promptForModels: false,
 }
 
-/** Read a JSON config file, returning an empty object on missing/invalid. */
+class DepthConfigError extends Error {}
+
+/** Read a JSON config file, returning an empty object on missing/invalid JSON. */
 function readConfigFile(filePath: string): Partial<EnsembleConfig> {
   try {
     const text = readFileSync(filePath, "utf-8")
     const raw = JSON.parse(text) as Record<string, unknown>
     // Validate types — only accept numbers for numeric fields, booleans for boolean fields
     const result: Partial<EnsembleConfig> = {}
+    if (Object.hasOwn(raw, "depth_limit")) {
+      if (typeof raw.depth_limit !== "number" || !Number.isSafeInteger(raw.depth_limit) || raw.depth_limit < 1) {
+        throw new DepthConfigError(`Invalid depth_limit in ${filePath}: expected a positive safe integer`)
+      }
+      result.depth_limit = raw.depth_limit
+    }
+    if (Object.hasOwn(raw, "depth_limit_overflow_action")) {
+      if (raw.depth_limit_overflow_action !== "user_resolve" && raw.depth_limit_overflow_action !== "lead_resolve") {
+        throw new DepthConfigError(`Invalid depth_limit_overflow_action in ${filePath}: expected user_resolve or lead_resolve`)
+      }
+      result.depth_limit_overflow_action = raw.depth_limit_overflow_action
+    }
     if (typeof raw.mergeOnCleanup === "boolean") result.mergeOnCleanup = raw.mergeOnCleanup
     if (typeof raw.stallThresholdMs === "number") result.stallThresholdMs = raw.stallThresholdMs
     if (typeof raw.stallMinSteps === "number") result.stallMinSteps = raw.stallMinSteps
@@ -77,6 +97,7 @@ function readConfigFile(filePath: string): Partial<EnsembleConfig> {
     if (typeof raw.promptForModels === "boolean") result.promptForModels = raw.promptForModels
     return result
   } catch (err) {
+    if (err instanceof DepthConfigError) throw err
     if (err && typeof err === "object" && "code" in err && err.code === "ENOENT") return {}
     console.warn(`[ensemble] Invalid config at ${filePath}, using defaults`)
     return {}

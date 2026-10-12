@@ -29,6 +29,8 @@ describe("dashboard UI contract", () => {
     expect(DASHBOARD_HEAD).toContain('id="graph-scroll"')
     expect(DASHBOARD_HEAD).toContain('id="graph-content"')
     expect(DASHBOARD_HEAD).toContain(".dashboard-panel[hidden]")
+    expect(DASHBOARD_HEAD).toContain('id="graph-hide-completed"')
+    expect(DASHBOARD_HEAD).toContain("Hide completed tasks")
   })
   test("HTML shell exposes triage cockpit regions", () => {
     expect(DASHBOARD_HEAD).toContain('id="attention"')

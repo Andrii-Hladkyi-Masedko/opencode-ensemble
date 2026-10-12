@@ -2,6 +2,14 @@ import type { Database } from "./db"
 import type { MemberRegistry, DescendantTracker, PendingPurgeApprovals } from "./state"
 import type { EnsembleConfig } from "./config"
 import type { ProgressTracker } from "./progress"
+import type { PendingTaskDepthApprovals } from "./task-depth-approvals"
+
+/** A session exists even though post-creation initialization failed; caller must roll it back. */
+export class SessionInitializationError extends Error {
+  constructor(readonly createdSessionId: string, cause: unknown) {
+    super(`Session initialization failed: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })
+  }
+}
 
 /**
  * Shared dependencies injected into every tool's execute function.
@@ -12,6 +20,7 @@ export interface ToolDeps {
   registry: MemberRegistry
   tracker: DescendantTracker
   purgeApprovals: PendingPurgeApprovals
+  depthApprovals: PendingTaskDepthApprovals
   /** The OpenCode SDK client — used for session.create, promptAsync, abort, etc. */
   client: PluginClient
   /** The project root directory — used for reading AGENTS.md and other project files. */

@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from "bun:test"
 import { setupDeps, insertTeam, insertMember } from "./helpers"
 import { executeTeamCreate } from "../src/tools/team-create"
-import { executeTeamSpawn } from "../src/tools/team-spawn"
+import { spawnWithRecordedTask as executeTeamSpawn } from "./helpers"
 import { executeTeamMessage } from "../src/tools/team-message"
 import { executeTeamShutdown } from "../src/tools/team-shutdown"
 import { executeTeamCleanup } from "../src/tools/team-cleanup"

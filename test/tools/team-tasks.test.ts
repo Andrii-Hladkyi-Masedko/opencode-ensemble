@@ -22,8 +22,8 @@ describe("team_tasks_list", () => {
 
   test("lists tasks with status and assignee", async () => {
     await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Fix bug", priority: "high" },
-      { content: "Write docs", priority: "low" },
+      { content: "Fix bug", priority: "high", depends_on: [] },
+      { content: "Write docs", priority: "low", depends_on: [] },
     ] }, "sess-alice")
 
     const result = await executeTeamTasksList(deps, "sess-alice")
@@ -50,8 +50,8 @@ describe("team_tasks_add", () => {
 
   test("adds tasks and returns IDs", async () => {
     const result = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Task A", priority: "high" },
-      { content: "Task B", priority: "medium" },
+      { content: "Task A", priority: "high", depends_on: [] },
+      { content: "Task B", priority: "medium", depends_on: [] },
     ] }, "sess-alice")
 
     expect(result).toContain("Added 2 task")
@@ -61,7 +61,7 @@ describe("team_tasks_add", () => {
 
   test("adds tasks with dependencies", async () => {
     const result1 = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Task A", priority: "high" },
+      { content: "Task A", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     // Extract the task ID from the result
     const idMatch = result1.match(/task_\S+/)
@@ -84,7 +84,7 @@ describe("team_tasks_add", () => {
 
   test("lead can add tasks", async () => {
     const result = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Lead task", priority: "high" },
+      { content: "Lead task", priority: "high", depends_on: [] },
     ] }, "lead-sess")
     expect(result).toContain("Added 1 task")
   })
@@ -102,7 +102,7 @@ describe("team_tasks_complete", () => {
 
   test("marks a task as completed", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Fix bug", priority: "high" },
+      { content: "Fix bug", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskId = addResult.match(/task_\S+/)![0]!
 
@@ -119,8 +119,8 @@ describe("team_tasks_complete", () => {
 
   test("fires a progress toast on completion", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Task A", priority: "high" },
-      { content: "Task B", priority: "high" },
+      { content: "Task A", priority: "high", depends_on: [] },
+      { content: "Task B", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskIds = [...addResult.matchAll(/task_[a-z0-9_]+/g)].map(m => m[0])
 
@@ -135,7 +135,7 @@ describe("team_tasks_complete", () => {
 
   test("unblocks dependent tasks when completed", async () => {
     const r1 = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Task A", priority: "high" },
+      { content: "Task A", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskAId = r1.match(/task_\S+/)![0]!
 
@@ -181,7 +181,7 @@ describe("team_claim", () => {
 
   test("claims a pending task", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Fix bug", priority: "high" },
+      { content: "Fix bug", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskId = addResult.match(/task_\S+/)![0]!
 
@@ -196,7 +196,7 @@ describe("team_claim", () => {
 
   test("rejects claiming an already-claimed task", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Fix bug", priority: "high" },
+      { content: "Fix bug", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskId = addResult.match(/task_\S+/)![0]!
 
@@ -207,7 +207,7 @@ describe("team_claim", () => {
 
   test("rejects claiming a blocked task", async () => {
     const r1 = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Task A", priority: "high" },
+      { content: "Task A", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskAId = r1.match(/task_\S+/)![0]!
 
@@ -227,7 +227,7 @@ describe("team_claim", () => {
 
   test("race condition: two concurrent claims, only one succeeds", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Contested task", priority: "high" },
+      { content: "Contested task", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const taskId = addResult.match(/task_\S+/)![0]!
 
@@ -244,10 +244,10 @@ describe("team_claim", () => {
 
   test("multiple members claim from a pool larger than member count — no double claims", async () => {
     const addResult = await executeTeamTasksAdd(deps, { tasks: [
-      { content: "Task 1", priority: "high" },
-      { content: "Task 2", priority: "high" },
-      { content: "Task 3", priority: "high" },
-      { content: "Task 4", priority: "high" },
+      { content: "Task 1", priority: "high", depends_on: [] },
+      { content: "Task 2", priority: "high", depends_on: [] },
+      { content: "Task 3", priority: "high", depends_on: [] },
+      { content: "Task 4", priority: "high", depends_on: [] },
     ] }, "sess-alice")
     const ids = [...addResult.matchAll(/task_[a-z0-9_]+/g)].map(m => m[0]!)
 
@@ -288,7 +288,7 @@ describe("team_tasks_complete — ownership and state validation (issue #27)", (
   })
 
   test("a member cannot complete a task claimed by another member", async () => {
-    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Shared task", priority: "high" }] }, "sess-alice")
+    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Shared task", priority: "high", depends_on: [] }] }, "sess-alice")
     const taskId = r.match(/task_\S+/)![0]!
     await executeTeamClaim(deps, { task_id: taskId }, "sess-alice")
 
@@ -300,20 +300,19 @@ describe("team_tasks_complete — ownership and state validation (issue #27)", (
     expect(row.assignee).toBe("alice")
   })
 
-  test("completing an unclaimed pending task attributes it to the caller", async () => {
-    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Unclaimed work", priority: "medium" }] }, "sess-alice")
+  test("completing an unclaimed pending task is rejected", async () => {
+    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Unclaimed work", priority: "medium", depends_on: [] }] }, "sess-alice")
     const taskId = r.match(/task_\S+/)![0]!
 
-    const result = await executeTeamTasksComplete(deps, { task_id: taskId }, "sess-bob")
-    expect(result).toContain("Completed")
+    await expect(executeTeamTasksComplete(deps, { task_id: taskId }, "sess-bob")).rejects.toThrow("claimed")
 
     const row = deps.db.query("SELECT status, assignee FROM team_task WHERE id = ?").get(taskId) as Record<string, string>
-    expect(row.status).toBe("completed")
-    expect(row.assignee).toBe("bob")
+    expect(row.status).toBe("pending")
+    expect(row.assignee).toBeNull()
   })
 
   test("completing an already-completed task is rejected", async () => {
-    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Done task", priority: "high" }] }, "sess-alice")
+    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Done task", priority: "high", depends_on: [] }] }, "sess-alice")
     const taskId = r.match(/task_\S+/)![0]!
     await executeTeamClaim(deps, { task_id: taskId }, "sess-alice")
     await executeTeamTasksComplete(deps, { task_id: taskId }, "sess-alice")
@@ -323,7 +322,7 @@ describe("team_tasks_complete — ownership and state validation (issue #27)", (
   })
 
   test("completing a blocked task is rejected", async () => {
-    const rA = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task A", priority: "high" }] }, "sess-alice")
+    const rA = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task A", priority: "high", depends_on: [] }] }, "sess-alice")
     const idA = rA.match(/task_\S+/)![0]!
     const rB = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task B", priority: "medium", depends_on: [idA] }] }, "sess-alice")
     const idB = rB.match(/task_\S+/)![0]!
@@ -333,7 +332,7 @@ describe("team_tasks_complete — ownership and state validation (issue #27)", (
   })
 
   test("the lead can complete a task claimed by a member", async () => {
-    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Lead-completed task", priority: "high" }] }, "sess-alice")
+    const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Lead-completed task", priority: "high", depends_on: [] }] }, "sess-alice")
     const taskId = r.match(/task_\S+/)![0]!
     await executeTeamClaim(deps, { task_id: taskId }, "sess-alice")
 
@@ -344,9 +343,9 @@ describe("team_tasks_complete — ownership and state validation (issue #27)", (
   })
 
   test("a multi-dependency task unblocks only after all dependencies complete", async () => {
-    const rA = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task A", priority: "high" }] }, "sess-alice")
+    const rA = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task A", priority: "high", depends_on: [] }] }, "sess-alice")
     const idA = rA.match(/task_\S+/)![0]!
-    const rB = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task B", priority: "high" }] }, "sess-alice")
+    const rB = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task B", priority: "high", depends_on: [] }] }, "sess-alice")
     const idB = rB.match(/task_\S+/)![0]!
     const rC = await executeTeamTasksAdd(deps, { tasks: [{ content: "Task C", priority: "medium", depends_on: [idA, idB] }] }, "sess-alice")
     const idC = rC.match(/task_\S+/)![0]!

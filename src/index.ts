@@ -38,6 +38,7 @@ import { executeTeamView } from "./tools/team-view"
 import type { ToolDeps, } from "./types"
 import { TokenBucket } from "./rate-limit"
 import { Watchdog } from "./watchdog"
+import { getTaskDepthApprovals, configureDepthLocation, observeDepthQuestionAnswer } from "./task-depth-approvals"
 
 const DEFAULT_RATE_LIMIT_REFILL = 2
 const DEFAULT_RATE_LIMIT_INTERVAL_MS = 1000
@@ -61,6 +62,8 @@ const plugin: Plugin = async (input) => {
   const registry = new MemberRegistry()
   const tracker = new DescendantTracker()
   const purgeApprovals = new PendingPurgeApprovals()
+  const depthApprovals = getTaskDepthApprovals(db, dbPath)
+  configureDepthLocation(db, depthApprovals, input.directory)
   const nudgedMembers = new Set<string>()
   const progressTracker = new ProgressTracker()
   const activityBuffer = new ActivityBuffer()
@@ -75,7 +78,7 @@ const plugin: Plugin = async (input) => {
   const rawClient = new OpencodeClient({ client: pluginTransport })
   initLog(rawClient)
   const client = wrapThrowingClient(rawClient)
-  const deps: ToolDeps = { db, registry, tracker, purgeApprovals, client, directory: input.directory, config, progressTracker }
+  const deps: ToolDeps = { db, registry, tracker, purgeApprovals, depthApprovals, client, directory: input.directory, config, progressTracker }
 
   // Recovery only runs for the main project instance — NOT for teammate worktree instances.
   // Worktree instances are created during session.create. Running recovery there makes HTTP
@@ -372,6 +375,7 @@ const plugin: Plugin = async (input) => {
 
     "tool.execute.after": async (input, output) => {
       if (input.tool === "question") {
+        observeDepthQuestionAnswer(depthApprovals, input.sessionID, output.output, input.args, true)
         purgeApprovals.recordQuestionAnswer(input.sessionID, output.output, input.args)
       }
       // Record tool result activity for team member sessions
@@ -443,7 +447,8 @@ const plugin: Plugin = async (input) => {
           agent: tool.schema.string().default("build").describe("Agent type (e.g. 'build', 'plan', 'explore')"),
           prompt: tool.schema.string().describe("Task instructions for the teammate"),
           model: tool.schema.string().optional().describe("Model in provider/model format (optional, uses default)"),
-          claim_task: tool.schema.string().optional().describe("Task ID to auto-claim for this teammate (optional)"),
+          claim_task: tool.schema.string().describe("Required ready task ID to claim for every teammate, including read-only agents"),
+          depth_approval_token: tool.schema.string().optional().describe("Depth preview token after a real approved question"),
           worktree: tool.schema.boolean().default(true).describe("Create a git worktree for file isolation (default: true, set false for read-only agents)"),
           plan_approval: tool.schema.boolean().default(false).describe("Require teammate to send a plan for approval before writing files (default: false)"),
         },
@@ -508,17 +513,19 @@ const plugin: Plugin = async (input) => {
       }),
 
       team_tasks_add: tool({
-        description: "Add tasks to the shared team task board so teammates can see what work is available and claim it.",
+        description: "Create tasks with explicit depends_on ([] for independent work) or lead-only review existing dependencies using task_id. Resolve depth overflow through the configured policy.",
         args: {
           tasks: tool.schema.array(tool.schema.object({
-            content: tool.schema.string().describe("Task description"),
-            priority: tool.schema.enum(["high", "medium", "low"]).default("medium").describe("Task priority"),
-            depends_on: tool.schema.array(tool.schema.string()).optional().describe("Task IDs this depends on"),
+            task_id: tool.schema.string().optional().describe("Existing task ID to review (lead only); omit to create"),
+            content: tool.schema.string().optional().describe("Task description; required on creation, preserved if omitted during review"),
+            priority: tool.schema.enum(["high", "medium", "low"]).optional().describe("Task priority; defaults to medium on creation"),
+            depends_on: tool.schema.array(tool.schema.string()).describe("Explicit prerequisites using real task IDs; [] means independent"),
           })).describe("Tasks to add"),
+          depth_approval_token: tool.schema.string().optional().describe("Depth preview token after real human approval"),
         },
         async execute(args, ctx) {
           const result = await executeTeamTasksAdd(deps, args, ctx.sessionID)
-          ctx.metadata({ title: `Added ${args.tasks.length} task${args.tasks.length !== 1 ? "s" : ""}` })
+          ctx.metadata({ title: result.startsWith("Depth overflow") ? "Dependency depth approval required" : `Recorded ${args.tasks.length} tasks` })
           return result
         },
       }),

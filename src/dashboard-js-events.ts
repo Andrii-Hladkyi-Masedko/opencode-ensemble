@@ -103,6 +103,7 @@ document.addEventListener('click',function(e){
   const button=e.target.closest?.('button');
   if(button?.dataset.dashboardTab){selectDashboardTab(button.dataset.dashboardTab);return}
   if(button?.id==='graph-reset'){resetGraphView();return}
+  if(button?.id==='graph-show-completed'){setGraphHideCompleted(false);return}
   if(button?.dataset.graphTask!==undefined){selectGraphTask(button.dataset.graphTask);return}
   if(button?.dataset.graphSelect!==undefined){selectGraphTask(button.dataset.graphSelect);return}
   if(button?.dataset.graphAgent!==undefined){openDrawer(button.dataset.graphAgent);return}
@@ -113,6 +114,7 @@ document.addEventListener('click',function(e){
 });
 
 // Keyboard shortcuts
+document.addEventListener('change',function(e){if(e.target.id==='graph-hide-completed')setGraphHideCompleted(e.target.checked)});
 document.addEventListener('keydown',function(e){
   const shortcutsOpen=document.getElementById('sco').classList.contains('show');
   if(shortcutsOpen&&e.key==='Tab'){trapFocus(document.getElementById('sco'),e);return}

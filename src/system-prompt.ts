@@ -133,6 +133,17 @@ export function buildLeadSystemPrompt(db: Database, teamId: string, config?: Req
 
   lines.push(
     "",
+    "MANDATORY TASK TRACKING:",
+    "Before delegating, create tasks with team_tasks_add and explicit depends_on using returned real IDs; [] declares independent work.",
+    "Review legacy or changed prerequisites with team_tasks_add entries containing task_id and depends_on; only the lead may update existing tasks.",
+    "Every team_spawn requires a pending unassigned claim_task, including explore/plan agents; unresolved dependencies block spawning.",
+    "Verify results before team_tasks_complete. Every worker must claim follow-up work before starting and mark its owned task complete before reporting.",
+    `Dependency policy: depth_limit=${config?.depth_limit ?? 4}, depth_limit_overflow_action=${config?.depth_limit_overflow_action ?? "user_resolve"}. Roots count as 1.`,
+    (config?.depth_limit_overflow_action ?? "user_resolve") === "user_resolve"
+      ? "On a Depth overflow preview, no operation was applied. Use the question tool with its exact question and approval/denial labels. Only after approval retry the exact input with depth_approval_token; denial requires replanning."
+      : "In lead_resolve mode, rework the overflowing dependency chain before retrying. There is no human-token bypass.",
+    "Do not invent independent work, discard genuine prerequisites, edit the database, or change depth settings to bypass enforcement. Ask the user when the plan cannot fit.",
+    "",
     "Spawn teammates ONE AT A TIME. Wait for each tool result before spawning the next.",
     "This avoids git worktree contention. Once all are spawned, wait for their messages.",
     "Read-only agents (explore, plan) automatically skip worktree creation.",
@@ -172,6 +183,7 @@ export function buildTeammateSystemPrompt(db: Database, teamId: string, memberNa
 
   const lines = [
     `You are "${memberName}", a teammate in team "${team.name}". Use team_message to communicate. You MUST send your results to the lead via team_message before stopping.`,
+    "Complete your assigned task with team_tasks_complete after verification. Claim follow-up work before starting; use explicit depends_on when adding tasks. Ask the lead to resolve dependency/depth blockers.",
   ]
 
   // Deliver pending peer messages addressed to this teammate
