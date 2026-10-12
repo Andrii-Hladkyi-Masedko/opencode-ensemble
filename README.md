@@ -12,11 +12,14 @@ unfinished prerequisites. Arrows flow from prerequisite to dependent. Select a
 card to inspect its dependencies and open the assigned agent's existing drawer.
 Unassigned tasks remain visible; missing prerequisites and cycles show warnings.
 The graph updates with live dashboard state and supports keyboard navigation.
+Use **Hide completed tasks** to hide finished cards and their arrows. Your choice
+persists in the browser; hidden prerequisites still count as resolved and remain
+listed in task details. Cancelled tasks remain visible.
 
 Install this fork in OpenCode V2:
 
 ```bash
-opencode plugin add 'github:Andrii-Hladkyi-Masedko/opencode-ensemble#feature/dependency-graph'
+opencode plugin add 'github:Andrii-Hladkyi-Masedko/opencode-ensemble#main'
 ```
 
 Replace any existing upstream Ensemble plugin entry rather than loading both.
@@ -28,9 +31,60 @@ For local development, point the `plugins` entry at your clone/worktree:
 ```jsonc
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugins": [{ "package": "/absolute/path/to/opencode-ensemble" }]
+  "plugins": [{ "package": "/absolute/path/to/opencode-ensemble/src" }]
 }
 ```
+
+### Mandatory task tracking and depth policy
+
+Every task requires explicit `depends_on`: use `[]` for independent work, or
+real IDs returned by earlier calls for prerequisites. Every spawn requires a
+pending, unassigned `claim_task`, including scouts and read-only reviewers.
+Unresolved prerequisites block work; completed and cancelled prerequisites resolve it.
+Follow-up work must be claimed before starting. Only a claimed in-progress task
+may be completed, after verification. The plugin enforces recording/ownership;
+it cannot prove a lead identified every genuine dependency or ran verification.
+
+The lead can review existing tasks without adding another tool:
+
+```ts
+team_tasks_add({ tasks: [{ task_id: "existing-task-id", depends_on: ["real-prerequisite-id"] }] })
+```
+
+Omitted content and priority are preserved on updates. Legacy NULL declarations
+require explicit lead review (`depends_on: []` if genuinely independent). Existing
+running legacy tasks may finish. No legacy dependencies are inferred automatically.
+Missing/cross-team IDs, cycles, and edits that add blockers to active work are rejected.
+Task batches are atomic; failure or overflow preview applies nothing.
+
+Configure globally in `~/.config/opencode/ensemble.json` or override per project
+in `.opencode/ensemble.json`:
+
+```json
+{
+  "depth_limit": 4,
+  "depth_limit_overflow_action": "user_resolve"
+}
+```
+
+Roots count as level 1; the deepest recorded prerequisite chain sets team depth,
+including completed/cancelled tasks. `depth_limit` must be a positive safe integer.
+The default limit is **4**, and the default action is **user_resolve**:
+
+- **user_resolve:** an overflowing task or spawn call returns a preview and token.
+  The lead must ask the user through the native question tool using the exact
+  question and approve/deny labels from the preview. Only a real approval permits
+  retrying the identical input with `depth_approval_token`. Tokens expire after
+  ten minutes, are one-use, and cannot authorize different inputs/graphs/settings.
+  Approval accepts that topology for later operations without repeating prompts.
+- **lead_resolve:** reject the overflowing operation and show the offending chain.
+  The lead must restructure the plan while preserving genuine prerequisites;
+  approval tokens cannot bypass this mode.
+
+Approvals are runtime-scoped: restart/reload or a successful topology/policy change
+requires fresh approval when still over the limit. Running agents are not stopped.
+Workers encountering overflow on `team_claim` ask the lead to resolve it first.
+Do not modify SQL or settings, or discard real dependencies, to evade the guard.
 
 [![npm version](https://img.shields.io/npm/v/@hueyexe/opencode-ensemble.svg)](https://www.npmjs.com/package/@hueyexe/opencode-ensemble)
 [![npm downloads](https://img.shields.io/npm/dm/@hueyexe/opencode-ensemble.svg)](https://www.npmjs.com/package/@hueyexe/opencode-ensemble)
@@ -79,8 +133,8 @@ The lead uses the task board to make sequencing visible. Record the returned tas
 ```ts
 team_tasks_add({
   tasks: [
-    { content: "Map checkout webhook flow and identify idempotency risks", priority: "high" },
-    { content: "Implement duplicate-webhook idempotency guard", priority: "high" },
+    { content: "Map checkout webhook flow and identify idempotency risks", priority: "high", depends_on: [] },
+    { content: "Implement duplicate-webhook idempotency guard", priority: "high", depends_on: [] },
   ],
 })
 // -> Added 2 tasks: task_abc123, task_def456

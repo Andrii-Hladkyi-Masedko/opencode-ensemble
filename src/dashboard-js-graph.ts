@@ -1,6 +1,13 @@
 /** Dashboard JS — dependency graph view, task inspection, and tab interactions. */
 export const DASHBOARD_JS_GRAPH = `
 let dashboardTab='overview',graphSelectedId=null,graphTeamId=null,graphRenderedMarkup=null;
+let graphHideCompleted=(function(){try{return localStorage.getItem('ensemble-graph-hide-completed')==='1'}catch(e){return false}})();
+function setGraphHideCompleted(hide){
+  graphHideCompleted=!!hide;
+  try{localStorage.setItem('ensemble-graph-hide-completed',graphHideCompleted?'1':'0')}catch(e){}
+  const control=document.getElementById('graph-hide-completed');if(control)control.checked=graphHideCompleted;
+  const team=cur();if(team)rGraph(team);
+}
 function selectDashboardTab(view){
   dashboardTab=view==='dependencies'?'dependencies':'overview';
   ['overview','dependencies'].forEach(name=>{
@@ -19,12 +26,13 @@ function graphTabKeydown(e){
 function rGraph(team){
   const switched=graphTeamId!==team.id;
   if(switched){graphTeamId=team.id;graphSelectedId=null;graphRenderedMarkup=null;resetGraphView()}
-  if(graphSelectedId!==null&&!(team.tasks||[]).some(task=>task.id===graphSelectedId))graphSelectedId=null;
+  if(graphSelectedId!==null&&!(team.tasks||[]).some(task=>task.id===graphSelectedId&&(!graphHideCompleted||task.status!=='completed')))graphSelectedId=null;
   if(dashboardTab!=='dependencies')return;
+  const control=document.getElementById('graph-hide-completed');if(control)control.checked=graphHideCompleted;
   const root=document.getElementById('graph-content'),scroll=document.getElementById('graph-scroll');
   const left=scroll.scrollLeft,top=scroll.scrollTop,focused=document.activeElement;
   const focusData=root.contains(focused)?{task:focused.dataset?.graphTask,select:focused.dataset?.graphSelect,agent:focused.dataset?.graphAgent,scroll:focused.id==='graph-scroll'}:null;
-  const html=graphMarkup(team,graphLayout(team.tasks||[]),graphSelectedId);
+  const html=graphMarkup(team,graphLayout(team.tasks||[]),graphSelectedId,graphHideCompleted);
   // SVG serialization expands self-closing paths; compare generated markup, not DOM HTML.
   if(graphRenderedMarkup===html)return;
   patch(root,html);graphRenderedMarkup=html;
@@ -56,12 +64,13 @@ function graphCard(node,team,byId,selectedId,cyclic){
     '<div class="graph-card-foot">'+chip(E(String(task.status).replace(/_/g,' ')),info.color)+chip(E(task.priority||'medium'),'muted')+(cyclic?chip('cycle affected','amber'):'')+'</div>'+
     '<div class="graph-card-meta" title="'+E(task.id)+'">'+E(info.hint||task.id)+'</div></button>';
 }
-function graphDetail(team,byId,selectedId){
+function graphDetail(team,byId,selectedId,hideCompleted=false){
   const task=byId.get(selectedId);
   if(!task)return '<div id="graph-detail" class="graph-detail" aria-live="polite"><h3 class="text-txt-200 font-semibold">Inspect a task</h3><p class="text-txt-400 mt-1">Select a card to see prerequisites, dependents, and its assigned agent.</p></div>';
   const member=(team.members||[]).find(m=>m.name===task.assignee),info=graphTaskInfo(task,byId);
   function links(ids){return ids.length?ids.map(id=>{
     const linked=byId.get(id);
+    if(linked&&hideCompleted&&linked.status==='completed')return '<div class="text-txt-400 mt-1">'+E(linked.content)+' '+chip('completed','green')+'</div>';
     return linked?'<button type="button" class="graph-detail-link" data-graph-select="'+E(id)+'">'+E(linked.content)+' '+chip(E(String(linked.status).replace(/_/g,' ')),'muted')+'</button>':'<div class="text-amber-400 mt-1">Missing prerequisite: '+E(id)+'</div>';
   }).join(''):'<div class="text-txt-500 mt-1">None</div>'}
   const dependents=(team.tasks||[]).filter(t=>graphDependencies(t).includes(task.id)).map(t=>t.id);
@@ -70,9 +79,17 @@ function graphDetail(team,byId,selectedId){
     '<div class="mt-2">Agent: '+(member?'<button type="button" class="text-blue-400 underline" data-graph-agent="'+E(member.name)+'">'+E(member.name)+' — open agent detail</button>':E(task.assignee||'Unassigned'))+'</div>'+
     '<div class="graph-detail-grid"><div><h4 class="text-txt-300 font-semibold">Prerequisites</h4>'+links(info.deps)+'</div><div><h4 class="text-txt-300 font-semibold">Dependents</h4>'+links(dependents)+'</div></div></div>';
 }
-function graphMarkup(team,layout,selectedId){
-  const tasks=team.tasks||[],byId=new Map(tasks.map(task=>[task.id,task])),nodes=new Map(layout.nodes.map(node=>[node.task.id,node]));
+function graphMarkup(team,layout,selectedId,hideCompleted=false){
+  const tasks=team.tasks||[],byId=new Map(tasks.map(task=>[task.id,task]));
   if(!tasks.length)return '<div id="graph-scroll" class="graph-scroll scroll" tabindex="0" aria-label="Task dependency graph"><div class="text-center text-txt-400 text-[13px] py-12">No tasks yet<div class="text-[11px] text-txt-500 mt-2">Add tasks with <code class="font-mono">team_tasks_add</code> to see their dependencies.</div></div></div>'+graphDetail(team,byId,null);
+  const completeLayout=layout;
+  if(hideCompleted){
+    const visible=tasks.filter(task=>task.status!=='completed'),ids=new Set(visible.map(task=>task.id));
+    const compact=graphLayout(visible.map(task=>({...task,dependsOn:graphDependencies(task).filter(id=>ids.has(id))})));
+    layout={...compact,nodes:compact.nodes.map(node=>({...node,task:byId.get(node.task.id)})),missing:completeLayout.missing,cyclic:completeLayout.cyclic.filter(id=>ids.has(id))};
+    if(!visible.length)return '<div id="graph-scroll" class="graph-scroll scroll" tabindex="0" aria-label="Task dependency graph"><div class="text-center text-txt-400 text-[13px] py-12">All tasks are completed<div class="mt-2"><button type="button" id="graph-show-completed" class="text-blue-400 underline">Show completed tasks</button></div></div></div>'+graphDetail(team,byId,null,true);
+  }
+  const nodes=new Map(layout.nodes.map(node=>[node.task.id,node]));
   let warning='';
   if(layout.cyclic.length)warning+='<div class="graph-warning">Cyclic dependencies: '+layout.cyclic.length+' task'+(layout.cyclic.length===1?'':'s')+' affected. Cycle-affected tasks are shown in the last column.</div>';
   if(layout.missing.length)warning+='<div class="graph-warning">Missing prerequisite'+(layout.missing.length===1?'':'s')+': '+layout.missing.map(item=>E(byId.get(item.taskId).content)+' → '+E(item.dependencyId)).join('; ')+'</div>';
@@ -94,6 +111,6 @@ function graphMarkup(team,layout,selectedId){
   const svg='<svg class="graph-edges" width="'+layout.width+'" height="'+height+'" aria-hidden="true"><defs>'+['done','pending'].map(name=>'<marker id="graph-arrow-'+name+'" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="'+(name==='done'?'#4ade80':'#64748b')+'"/></marker>').join('')+'</defs>'+edges+'</svg>';
   const cyclic=new Set(layout.cyclic),cards=layout.nodes.map(node=>graphCard(node,team,byId,selectedId,cyclic.has(node.task.id))).join('');
   return warning+'<div id="graph-scroll" class="graph-scroll scroll" tabindex="0" aria-label="Task dependency graph" aria-describedby="graph-description"><div class="graph-canvas" style="width:'+layout.width+'px;height:'+height+'px">'+svg+cards+'</div></div>'+
-    '<div class="graph-legend"><span class="text-emerald-400">✓ Completed prerequisite</span><span class="text-blue-400">● In progress</span><span class="text-amber-400">○ Blocked</span><span>→ Dependency direction</span></div>'+graphDetail(team,byId,selectedId);
+    '<div class="graph-legend"><span class="text-emerald-400">✓ Completed prerequisite</span><span class="text-blue-400">● In progress</span><span class="text-amber-400">○ Blocked</span><span>→ Dependency direction</span></div>'+graphDetail(team,byId,selectedId,hideCompleted);
 }
 `;

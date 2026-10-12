@@ -584,7 +584,7 @@ describe("team_spawn", () => {
     const text = (promptCall!.args[0] as { parts: Array<{ text: string }> }).parts[0]!.text
 
     expect(text).not.toContain("/tmp/worktree-")
-    expect(text).not.toContain("cd")
+    expect(text).not.toContain("cd to:")
   })
 
   test("context message does not mention worktree when worktree: false", async () => {

@@ -6,12 +6,33 @@ import { DASHBOARD_JS_GRAPH } from "../src/dashboard-js-graph"
 interface Task { id: string; content: string; status: string; assignee: string | null; dependsOn: string[]; priority: string }
 interface Member { name: string; agent: string; status: string; executionStatus: string; model: string }
 interface Team { id: string; tasks: Task[]; members: Member[] }
-const markup = new Function(`${DASHBOARD_JS_CORE}${DASHBOARD_JS_GRAPH_LAYOUT}${DASHBOARD_JS_GRAPH};return (t,id)=>graphMarkup(t,graphLayout(t.tasks),id)`)() as (t: Team, id?: string) => string
+const markup = new Function(`${DASHBOARD_JS_CORE}${DASHBOARD_JS_GRAPH_LAYOUT}${DASHBOARD_JS_GRAPH};return (t,id,hide)=>graphMarkup(t,graphLayout(t.tasks),id,hide)`)() as (t: Team, id?: string, hide?: boolean) => string
 const task = (id: string, dependsOn: string[] = [], assignee: string | null = null): Task => ({ id, content: `Task ${id}`, status: "pending", assignee, dependsOn, priority: "high" })
 const member: Member = { name: "api-dev", agent: "build", status: "busy", executionStatus: "running", model: "provider/model" }
 const team = (tasks: Task[], members = [member]): Team => ({ id: "team-a", tasks, members })
 
 describe("dependency graph rendering", () => {
+  test("hiding completed parents removes their cards/arrows but preserves child readiness and details", () => {
+    const t = team([{ ...task("a"), status: "completed" }, task("b", ["a"]), { ...task("cancelled"), status: "cancelled" }])
+    const html = markup(t, "b", true)
+    expect(html).not.toContain('data-graph-task="a"')
+    expect(html).not.toContain('data-edge-from="a"')
+    expect(html).toContain('data-graph-task="b"')
+    expect(html).toContain('data-graph-task="cancelled"')
+    expect(html).toContain("Prerequisites satisfied")
+    expect(html).not.toContain("Missing prerequisite")
+    expect(html).not.toContain('data-graph-select="a"')
+    expect(html).toContain("Task a")
+    expect(html).toContain("completed")
+    expect(html).toContain('left:24px')
+    expect(t.tasks).toHaveLength(3)
+  })
+  test("all-completed filter offers recovery instead of pretending there are no recorded tasks", () => {
+    const html = markup(team([{ ...task("a"), status: "completed" }]), undefined, true)
+    expect(html).toContain("All tasks are completed")
+    expect(html).toContain('id="graph-show-completed"')
+    expect(html).not.toContain("No tasks yet")
+  })
   test("cards retain all tasks including multiple tasks for one agent", () => {
     const html = markup(team([task("a", [], "api-dev"), task("b", ["a"], "api-dev")]))
     expect(html.match(/data-graph-task=/g)).toHaveLength(2)
@@ -105,7 +126,7 @@ describe("dependency graph rendering", () => {
 })
 
 describe("dependency graph view state", () => {
-  function harness(initial: Team) {
+  function harness(initial: Team, storage = { getItem: (_key: string): string | null => null, setItem: (_key: string, _value: string) => {} }) {
     const elements = new Map<string, { hidden: boolean; innerHTML: string; writes: number; scrollLeft: number; scrollTop: number; tabIndex: number; attrs: Record<string, string>; setAttribute(key: string, value: string): void; focus(): void; contains(): boolean; querySelectorAll(): [] }>()
     const get = (id: string) => {
       if (!elements.has(id)) {
@@ -120,14 +141,15 @@ describe("dependency graph view state", () => {
       return elements.get(id)!
     }
     const document = { getElementById: get, activeElement: null }
-    const api = new Function("document", "initial", `${DASHBOARD_JS_CORE}${DASHBOARD_JS_GRAPH_LAYOUT}${DASHBOARD_JS_GRAPH};
+    const api = new Function("document", "initial", "localStorage", `${DASHBOARD_JS_CORE}${DASHBOARD_JS_GRAPH_LAYOUT}${DASHBOARD_JS_GRAPH};
       S={teams:[initial]};selId=initial.id;
       return {selectDashboardTab,rGraph,selectGraphTask,resetGraphView,
       update:t=>{S={teams:[t]};selId=t.id;rGraph(t)},view:()=>dashboardTab,
-      selected:()=>graphSelectedId,key:graphTabKeydown};`)(document, initial) as {
+      selected:()=>graphSelectedId,key:graphTabKeydown,setGraphHideCompleted,hide:()=>graphHideCompleted};`)(document, initial, storage) as {
         selectDashboardTab(view: string): void; rGraph(t: Team): void; selectGraphTask(id: string): void; resetGraphView(): void
         update(t: Team): void; view(): string; selected(): string | null
         key(e: { key: string; preventDefault(): void; target: { id: string } }): void
+        setGraphHideCompleted(hide: boolean): void; hide(): boolean
       }
     return { api, get }
   }
@@ -195,5 +217,22 @@ describe("dependency graph view state", () => {
     api.resetGraphView()
     expect(get("graph-scroll").scrollLeft).toBe(0)
     expect(api.selected()).toBe("a")
+  })
+  test("hide preference persists across refresh/team switches and reloads", () => {
+    const values = new Map<string, string>()
+    const storage = { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value) } }
+    const t = team([task("a")]), { api } = harness(t, storage)
+    api.setGraphHideCompleted(true); api.update({ ...t, id: "other" })
+    expect(api.hide()).toBe(true)
+    expect(values.get("ensemble-graph-hide-completed")).toBe("1")
+    expect(harness(t, storage).api.hide()).toBe(true)
+  })
+  test("unavailable storage retains filtering in memory and live completion hides the selected card", () => {
+    const t = team([task("a")]), { api, get } = harness(t, { getItem: () => { throw new Error("private") }, setItem: () => { throw new Error("private") } })
+    api.selectDashboardTab("dependencies"); api.selectGraphTask("a"); api.setGraphHideCompleted(true)
+    api.update({ ...t, tasks: [{ ...t.tasks[0]!, status: "completed" }] })
+    expect(api.hide()).toBe(true)
+    expect(api.selected()).toBeNull()
+    expect(get("graph-content").innerHTML).toContain("All tasks are completed")
   })
 })
