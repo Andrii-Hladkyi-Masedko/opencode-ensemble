@@ -6,6 +6,8 @@ import type { ToolDeps, PluginClient } from "../src/types"
 import { DEFAULT_CONFIG } from "../src/config"
 import { ProgressTracker } from "../src/progress"
 import { PendingTaskDepthApprovals } from "../src/task-depth-approvals"
+import { executeTeamSpawn as runSpawn } from "../src/tools/team-spawn"
+import { randomUUID } from "node:crypto"
 
 /** Create a fresh in-memory DB with migrations applied. */
 export function setupDb(): EnsembleDatabase {
@@ -127,4 +129,14 @@ export function insertMember(db: EnsembleDatabase, teamId: string, name: string,
     "INSERT INTO team_member (team_id, name, session_id, agent, status, execution_status, time_created, time_updated) VALUES (?, ?, ?, 'build', ?, ?, ?, ?)",
     [teamId, name, sessionId, status, execStatus, Date.now(), Date.now()]
   )
+}
+
+/** Seed the required independent task for pre-existing spawn lifecycle tests. */
+export async function spawnWithRecordedTask(deps: ToolDeps, args: Parameters<typeof runSpawn>[1], sessionId: string): Promise<string> {
+  if (args.claim_task !== undefined) return runSpawn(deps, args, sessionId)
+  const team = deps.db.query("SELECT id FROM team WHERE lead_session_id=? AND status='active'").get(sessionId) as { id: string } | null
+  if (!team) return runSpawn(deps, args, sessionId)
+  const id = `task_fixture_${randomUUID()}`, now = Date.now()
+  deps.db.run("INSERT INTO team_task (id,team_id,content,status,priority,depends_on,time_created,time_updated) VALUES (?,?,?,'pending','medium','[]',?,?)", [id, team.id, args.prompt, now, now])
+  return runSpawn(deps, { ...args, claim_task: id }, sessionId)
 }

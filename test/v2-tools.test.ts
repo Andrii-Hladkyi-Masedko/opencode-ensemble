@@ -93,6 +93,11 @@ describe("v2-tools (issue #36, DRY: same execute fns as V1)", () => {
     const schema = defs.find(d => d.name === "team_tasks_add")!.input as { properties: { tasks: { items: { required: string[] } } } }
     expect(schema.properties.tasks.items.required).toContain("depends_on")
   })
+  test("spawn schema requires claim_task for every agent type", async () => {
+    const { defs, domain } = mockToolDomain()
+    await registerV2Tools(domain, mockDeps())
+    expect((defs.find(d => d.name === "team_spawn")!.input.required as string[])).toContain("claim_task")
+  })
   test("all 14 tools register with descriptions and input schemas", async () => {
     const { defs, domain } = mockToolDomain()
     await registerV2Tools(domain, mockDeps())

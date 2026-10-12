@@ -300,16 +300,15 @@ describe("team_tasks_complete — ownership and state validation (issue #27)", (
     expect(row.assignee).toBe("alice")
   })
 
-  test("completing an unclaimed pending task attributes it to the caller", async () => {
+  test("completing an unclaimed pending task is rejected", async () => {
     const r = await executeTeamTasksAdd(deps, { tasks: [{ content: "Unclaimed work", priority: "medium", depends_on: [] }] }, "sess-alice")
     const taskId = r.match(/task_\S+/)![0]!
 
-    const result = await executeTeamTasksComplete(deps, { task_id: taskId }, "sess-bob")
-    expect(result).toContain("Completed")
+    await expect(executeTeamTasksComplete(deps, { task_id: taskId }, "sess-bob")).rejects.toThrow("claimed")
 
     const row = deps.db.query("SELECT status, assignee FROM team_task WHERE id = ?").get(taskId) as Record<string, string>
-    expect(row.status).toBe("completed")
-    expect(row.assignee).toBe("bob")
+    expect(row.status).toBe("pending")
+    expect(row.assignee).toBeNull()
   })
 
   test("completing an already-completed task is rejected", async () => {

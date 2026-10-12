@@ -96,7 +96,7 @@ export async function registerV2Tools(domain: V2ToolDomain, deps: ToolDeps): Pro
     editor.add({
       name: "team_spawn",
       description:
-        "Spawn a new teammate that works in parallel. The teammate starts immediately with the given prompt. " +
+        "Spawn a new teammate on a required recorded claim_task with explicit dependencies, only when prerequisites are resolved. " +
         "Each teammate gets their own git worktree for file isolation. " +
         "Teammates work asynchronously and will message you when done. Do not poll for their status.",
       input: {
@@ -106,11 +106,12 @@ export async function registerV2Tools(domain: V2ToolDomain, deps: ToolDeps): Pro
           agent: str("Agent type (e.g. 'build', 'plan', 'explore')"),
           prompt: str("Task instructions for the teammate"),
           model: str("Model in provider/model format (optional, uses default)"),
-          claim_task: str("Task ID to auto-claim for this teammate (optional)"),
+          claim_task: str("Required pending unassigned task ID, including for explore/plan agents"),
+          depth_approval_token: str("Depth preview token after real human approval; cannot override lead_resolve"),
           worktree: bool("Create a git worktree for file isolation (default: true, set false for read-only agents)", true),
           plan_approval: bool("Require teammate to send a plan for approval before writing files (default: false)", false),
         },
-        required: ["name", "prompt"],
+        required: ["name", "prompt", "claim_task"],
         additionalProperties: false,
       },
       execute: run(executeTeamSpawn),

@@ -1,13 +1,14 @@
 import type { ToolDeps, PermissionRule } from "../types"
 import { validateMemberName } from "../util"
 import { requireLead } from "./shared"
-import { claimTask } from "./team-claim"
+import { claimTask, releaseTaskReservation } from "./team-claim"
 import { notifyLead } from "../notify"
-import { releaseMemberTasks } from "../tasks"
 import { parseModelId } from "../member-model"
 import { log } from "../log"
 import type { EnsembleConfig } from "../config"
-import { getTeamResourceParts, teamWorktreeName } from "./merge-helper"
+import { getTeamResourceParts, teamWorktreeName, preserveBranch, preservedBranchName } from "./merge-helper"
+import { inspectTaskGraph, requireDeclaredTask } from "../task-graph"
+import { readTaskNodes, authorizeDepth } from "../task-policy"
 
 /** Tracks consecutive spawn failures per team for circuit breaker. */
 export const spawnFailures = new Map<string, { count: number; lastError: string }>()
@@ -61,10 +62,52 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
  * Pass worktree: false for read-only agents that don't need isolation.
  * Pass plan_approval: true to require the teammate to send a plan before writing.
  */
-export async function executeTeamSpawn(
+interface SpawnArgs { name: string; agent?: string | null; prompt: string; model?: string; claim_task?: string; worktree?: boolean; plan_approval?: boolean; depth_approval_token?: string }
+interface SpawnResources { session?: string; workspace?: string; worktree?: string; branch?: string }
+
+async function preserveSpawnBranch(deps: ToolDeps, teamId: string, name: string, branch?: string): Promise<void> {
+  if (!branch) return
+  const resource = getTeamResourceParts(deps.db, teamId)
+  await preserveBranch(branch, preservedBranchName(resource.projectName, resource.teamName, teamId, name), deps.directory)
+}
+
+/** Spawn only a declared ready task; reserve before external calls and roll back every failure. */
+export async function executeTeamSpawn(deps: ToolDeps, args: SpawnArgs, sessionId: string): Promise<string> {
+  const nameError = validateMemberName(args.name)
+  if (nameError) throw new Error(nameError)
+  const team = requireLead(deps, sessionId)
+  if (typeof args.claim_task !== "string" || !args.claim_task.trim()) throw new Error("team_spawn requires claim_task; record explicit depends_on with team_tasks_add first")
+  const nodes = readTaskNodes(deps.db, team.teamId), task = requireDeclaredTask(nodes, args.claim_task)
+  if (task.status !== "pending" || task.assignee) throw new Error(`Task "${task.id}" is not pending and unassigned (status: ${task.status})`)
+  if (task.dependsOn?.some(id => !["completed", "cancelled"].includes(nodes.find(node => node.id === id)?.status ?? ""))) throw new Error(`Task "${task.id}" is blocked by unresolved dependencies`)
+  const base = inspectTaskGraph(nodes)
+  const { depth_approval_token: token, ...operation } = args
+  const decision = authorizeDepth(deps, sessionId, team.teamId, nodes, JSON.stringify(["spawn", operation]), base.fingerprint, token)
+  if (!decision.allowed) return decision.preview
+  if (decision.approveTopology) deps.depthApprovals.accept(team.teamId, base.fingerprint, deps.config.depth_limit)
+  const content = claimTask(deps, team.teamId, task.id, args.name, true)
+  const resources: SpawnResources = {}
+  try { return await spawnReserved(deps, args, sessionId, content, resources) }
+  catch (error) {
+    releaseTaskReservation(deps.db, team.teamId, task.id, args.name)
+    if (resources.session) {
+      deps.registry.unregister(resources.session)
+      deps.db.run("DELETE FROM team_member WHERE team_id=? AND session_id=?", [team.teamId, resources.session])
+      await preserveSpawnBranch(deps, team.teamId, args.name, resources.branch).catch(() => undefined)
+      await deps.client.session.abort({ sessionID: resources.session }).catch(() => undefined)
+    }
+    if (resources.workspace) await deps.client.workspace.remove({ id: resources.workspace }).catch(() => undefined)
+    if (resources.worktree) await deps.client.worktree.remove({ worktreeRemoveInput: { directory: resources.worktree } }).catch(() => undefined)
+    throw error
+  }
+}
+
+async function spawnReserved(
   deps: ToolDeps,
-  args: { name: string; agent?: string | null; prompt: string; model?: string; claim_task?: string; worktree?: boolean; plan_approval?: boolean },
+  args: SpawnArgs,
   sessionId: string,
+  claimedTaskContent: string,
+  resources: SpawnResources,
 ): Promise<string> {
   // Normalize agent: the tool schema defaults to "build", but Zod's .default()
   // only fires on undefined — an explicit null slips through and would violate
@@ -109,6 +152,7 @@ export async function executeTeamSpawn(
       if (result.data) {
         worktreeDir = result.data.directory
         worktreeBranch = result.data.branch
+        resources.worktree = worktreeDir; resources.branch = worktreeBranch
       }
       log(`spawn:worktree:done name=${args.name} dir=${worktreeDir}`)
     } catch (err) {
@@ -136,6 +180,7 @@ export async function executeTeamSpawn(
       )
       if (wsResult.data) {
         workspaceId = wsResult.data.id
+        resources.workspace = workspaceId
       }
       log(`spawn:workspace:done name=${args.name} id=${workspaceId}`)
     } catch (err) {
@@ -205,6 +250,7 @@ export async function executeTeamSpawn(
       getSpawnTimeout(), `session.create for "${args.name}"`
     )
     childSessionId = createResult.data?.id
+    resources.session = childSessionId
     log(`spawn:session:done name=${args.name} sessionId=${childSessionId}`)
   } catch (err) {
     log(`spawn:session:failed name=${args.name} err=${err instanceof Error ? err.message : String(err)}`)
@@ -212,23 +258,10 @@ export async function executeTeamSpawn(
     const errMsg = err instanceof Error ? err.message : String(err)
     const prev = spawnFailures.get(teamInfo.teamId)
     spawnFailures.set(teamInfo.teamId, { count: (prev?.count ?? 0) + 1, lastError: errMsg })
-    // Rollback workspace and worktree if session creation failed
-    if (workspaceId) {
-      try { await deps.client.workspace.remove({ id: workspaceId }) } catch { /* best effort */ }
-    }
-    if (worktreeDir) {
-      try { await deps.client.worktree.remove({ worktreeRemoveInput: { directory: worktreeDir } }) } catch { /* best effort */ }
-    }
     throw new Error(`Failed to create session for teammate "${args.name}": ${err instanceof Error ? err.message : String(err)}`)
   }
 
   if (!childSessionId) {
-    if (workspaceId) {
-      try { await deps.client.workspace.remove({ id: workspaceId }) } catch { /* best effort */ }
-    }
-    if (worktreeDir) {
-      try { await deps.client.worktree.remove({ worktreeRemoveInput: { directory: worktreeDir } }) } catch { /* best effort */ }
-    }
     throw new Error("Failed to create teammate session")
   }
 
@@ -255,20 +288,7 @@ export async function executeTeamSpawn(
   // Register in memory
   deps.registry.register(teamInfo.teamId, args.name, childSessionId)
 
-  // Auto-claim a task for this teammate when claim_task is provided (issue #27).
-  // Claims atomically so a task is never double-assigned when the lead hands out
-  // more tasks than there are teammates. Read-only agents cannot claim tasks.
-  let claimedTaskContent: string | null = null
-  let claimWarning: string | null = null
-  if (args.claim_task && !isReadOnly) {
-    try {
-      claimedTaskContent = claimTask(deps.db, teamInfo.teamId, args.claim_task, args.name)
-      log(`spawn:claim:ok name=${args.name} task=${args.claim_task}`)
-    } catch (err) {
-      claimWarning = err instanceof Error ? err.message : String(err)
-      log(`spawn:claim:failed name=${args.name} task=${args.claim_task} err=${claimWarning}`)
-    }
-  }
+  // Task was reserved before creating any external resources, including read-only agents.
 
   // Build teammate context message
   const context = [
@@ -319,6 +339,8 @@ export async function executeTeamSpawn(
       "- team_message: send a message to the lead or another teammate",
       "- team_broadcast: send a message to all team members",
       "- team_tasks_list: view the shared team task board",
+      "- team_tasks_complete: mark your assigned task complete after verifying your findings",
+      "- team_claim: claim ready follow-up work; ask the lead about dependency/depth blockers",
     )
   } else {
     context.push(
@@ -408,7 +430,7 @@ export async function executeTeamSpawn(
     parts: [{ type: "text", text: contextStr }],
     agent,
     ...(modelParam ? { model: modelParam } : {}),
-  }).catch((err) => {
+  }).catch(async (err) => {
     const errMsg = err instanceof Error ? err.message : String(err)
     log(`spawn:promptAsync:failed name=${args.name} err=${errMsg} — rolling back`)
     try {
@@ -417,10 +439,11 @@ export async function executeTeamSpawn(
       // Release any task auto-claimed for this teammate so it returns to the pool.
       if (claimedTaskContent) {
         deps.db.run(
-          "UPDATE team_task SET status = 'pending', assignee = NULL, time_updated = ? WHERE id = ? AND assignee = ? AND status = 'in_progress'",
-          [Date.now(), args.claim_task, args.name]
+          "UPDATE team_task SET status = 'pending', assignee = NULL, time_updated = ? WHERE id = ? AND team_id=? AND assignee = ? AND status = 'in_progress'",
+          [Date.now(), args.claim_task, teamInfo.teamId, args.name]
         )
       }
+      await preserveSpawnBranch(deps, teamInfo.teamId, args.name, worktreeBranch ?? undefined)
       deps.client.session.abort({ sessionID: childSessionId }).catch(() => { /* best effort */ })
       if (workspaceId) {
         deps.client.workspace.remove({ id: workspaceId }).catch(() => { /* best effort */ })
@@ -448,7 +471,7 @@ export async function executeTeamSpawn(
   const planInfo = usePlanApproval ? " [plan mode — will send plan for approval]" : ""
   const claimInfo = claimedTaskContent
     ? ` (claimed task: ${args.claim_task})`
-    : claimWarning ? ` (could not claim task: ${claimWarning})` : ""
+    : ""
   // Reset circuit breaker on success
   spawnFailures.delete(teamInfo.teamId)
   log(`spawn:done name=${args.name} sessionId=${childSessionId}`)

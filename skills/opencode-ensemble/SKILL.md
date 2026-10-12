@@ -36,8 +36,8 @@ Spawn teammates only for independent, verifiable work. A good Ensemble team has 
 
 1. Decide whether parallelism is justified.
 2. Create a team with `team_create`.
-3. Add tasks with `team_tasks_add`; use `depends_on` for sequencing.
-4. Spawn teammates one at a time with `team_spawn`.
+3. Add tasks with `team_tasks_add`; explicitly supply `depends_on`, including `[]` for independent work. Use real returned prerequisite IDs for sequencing.
+4. Spawn teammates one at a time with `team_spawn` and required `claim_task`, including explore/plan agents. Only pending unassigned tasks with resolved prerequisites can start.
 5. Use `worktree: false` for read-only `explore` teammates.
 6. Use `plan_approval: true` for risky implementation work.
 7. Wait for teammate messages instead of polling status repeatedly.
@@ -80,13 +80,35 @@ Start with two or three teammates. Add more only when the work has more independ
 
 ## Minimal Example
 
+### Task review and depth overflow
+
+The lead can repair an existing task without replacing it:
+
+```ts
+team_tasks_add({ tasks: [{ task_id: "task_existing", depends_on: ["task_parent"] }] })
+```
+
+Use actual IDs from the board. Omitted content/priority are preserved; new tasks
+require content. Claims require explicit declarations for the task and its ancestors.
+Workers must complete claimed tasks after verification; read-only agents also own tasks.
+
+Depth policy defaults to `depth_limit: 4` (root = 1) and
+`depth_limit_overflow_action: "user_resolve"` in `ensemble.json`.
+In `user_resolve`, overflowing task/spawn calls return a preview without applying
+anything. Ask the user using the question tool with the preview's exact question,
+approvalLabel and denialLabel. Only a real approval allows retrying the identical
+tool input with `depth_approval_token: preview.token`. Denial means replan.
+Tokens are one-use and expire; graph/policy/input changes require a fresh preview.
+In `lead_resolve`, rework the plan: no user approval-token bypass is available.
+Do not discard genuine dependencies, edit SQL, or change settings to evade the guard.
+
 ```ts
 team_create({ name: "checkout-idempotency" })
 
 team_tasks_add({
   tasks: [
-    { content: "Map checkout webhook flow and risky files", priority: "high" },
-    { content: "Implement duplicate-webhook idempotency guard", priority: "high" },
+    { content: "Map checkout webhook flow and risky files", priority: "high", depends_on: [] },
+    { content: "Implement duplicate-webhook idempotency guard", priority: "high", depends_on: [] },
   ],
 })
 // Record returned IDs, for example: task_abc123 for scout and task_def456 for builder.

@@ -67,6 +67,12 @@ test("terminal task edits preserve status and active tasks cannot gain blockers"
   await executeTeamTasksAdd(deps, { tasks: [{ task_id: b, depends_on: [a] }] }, "lead")
   expect(row(b).status).toBe("completed")
 })
+test("dependency review reconciles stale pending and blocked records across the board", async () => {
+  const a = await add("a"), b = await add("b", [a])
+  deps.db.run("UPDATE team_task SET status='pending' WHERE id=?", [b])
+  await executeTeamTasksAdd(deps, { tasks: [{ task_id: a, depends_on: [] }] }, "lead")
+  expect(row(b).status).toBe("blocked")
+})
 test("lead_resolve accepts depth four and rejects five without token bypass", async () => {
   deps.config.depth_limit_overflow_action = "lead_resolve"
   let parent = await add("a")

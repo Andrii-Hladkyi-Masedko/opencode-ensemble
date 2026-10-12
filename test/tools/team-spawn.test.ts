@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { setupDeps, insertTeam, insertMember } from "../helpers"
-import { executeTeamSpawn } from "../../src/tools/team-spawn"
+import { spawnWithRecordedTask as executeTeamSpawn } from "../helpers"
 import { executeTeamTasksAdd } from "../../src/tools/team-tasks-add"
 import type { ToolDeps } from "../../src/types"
 
@@ -176,24 +176,17 @@ describe("team_spawn", () => {
     expect(text).toContain("Mark it complete when done")
   })
 
-  test("claim_task that cannot be claimed still spawns but does not inject assignment and warns", async () => {
-    const result = await executeTeamSpawn(deps, {
+  test("claim_task that cannot be claimed blocks spawning", async () => {
+    await expect(executeTeamSpawn(deps, {
       name: "alice",
       agent: "build",
       prompt: "Fix the tests",
       claim_task: "task-does-not-exist",
-    }, "lead-sess")
-
-    expect(result).toContain("alice")
-    expect(result).toContain("spawned")
-    expect(result).toContain("could not claim task")
-
-    const promptCall = deps.client.calls.find(c => c.method === "session.promptAsync")
-    const text = (promptCall!.args[0] as { parts: Array<{ text: string }> }).parts[0]!.text
-    expect(text).not.toContain("You have been assigned task")
+    }, "lead-sess")).rejects.toThrow("not found")
+    expect(deps.client.calls).toEqual([])
   })
 
-  test("context message does NOT include assigned task line when claim_task is absent", async () => {
+  test("recorded-task lifecycle fixture injects the required task assignment", async () => {
     await executeTeamSpawn(deps, {
       name: "alice",
       agent: "build",
@@ -204,12 +197,12 @@ describe("team_spawn", () => {
     expect(promptCall).toBeTruthy()
     const text = (promptCall!.args[0] as { parts: Array<{ text: string }> }).parts[0]!.text
 
-    expect(text).not.toContain("You have been assigned task")
+    expect(text).toContain("You have been assigned task")
   })
 
   test("claim_task actually claims the task in the DB for the spawned teammate", async () => {
     deps.db.run(
-      "INSERT INTO team_task (id, team_id, content, status, priority, time_created, time_updated) VALUES ('task_real', 't1', 'Do work', 'pending', 'medium', ?, ?)",
+      "INSERT INTO team_task (id, team_id, content, status, priority, depends_on, time_created, time_updated) VALUES ('task_real', 't1', 'Do work', 'pending', 'medium', '[]', ?, ?)",
       [Date.now(), Date.now()],
     )
 
@@ -225,39 +218,34 @@ describe("team_spawn", () => {
     expect(row.assignee).toBe("alice")
   })
 
-  test("claim_task on a nonexistent task does not fail the spawn", async () => {
-    const result = await executeTeamSpawn(deps, {
+  test("claim_task on a nonexistent task fails the spawn", async () => {
+    await expect(executeTeamSpawn(deps, {
       name: "alice",
       agent: "build",
       prompt: "Fix the tests",
       claim_task: "task-123",
-    }, "lead-sess")
-
-    expect(result).toContain("alice")
-    expect(result).toContain("spawned")
+    }, "lead-sess")).rejects.toThrow("not found")
   })
 
-  test("claim_task on an already-claimed task does not steal it or fail the spawn", async () => {
+  test("claim_task on an already-claimed task blocks spawn without stealing it", async () => {
     deps.db.run(
-      "INSERT INTO team_task (id, team_id, content, status, priority, assignee, time_created, time_updated) VALUES ('task_taken', 't1', 'Do work', 'in_progress', 'medium', 'bob', ?, ?)",
+      "INSERT INTO team_task (id, team_id, content, status, priority, assignee, depends_on, time_created, time_updated) VALUES ('task_taken', 't1', 'Do work', 'in_progress', 'medium', 'bob', '[]', ?, ?)",
       [Date.now(), Date.now()],
     )
 
-    const result = await executeTeamSpawn(deps, {
+    await expect(executeTeamSpawn(deps, {
       name: "alice",
       agent: "build",
       prompt: "Fix the tests",
       claim_task: "task_taken",
-    }, "lead-sess")
-
-    expect(result).toContain("spawned")
+    }, "lead-sess")).rejects.toThrow("pending")
     const row = deps.db.query("SELECT status, assignee FROM team_task WHERE id = ?").get("task_taken") as { status: string; assignee: string | null }
     expect(row.assignee).toBe("bob")
   })
 
   test("releases the claimed task if the spawn rolls back on delivery failure", async () => {
     deps.db.run(
-      "INSERT INTO team_task (id, team_id, content, status, priority, time_created, time_updated) VALUES ('task_real', 't1', 'Do work', 'pending', 'medium', ?, ?)",
+      "INSERT INTO team_task (id, team_id, content, status, priority, depends_on, time_created, time_updated) VALUES ('task_real', 't1', 'Do work', 'pending', 'medium', '[]', ?, ?)",
       [Date.now(), Date.now()],
     )
     deps.client.session.promptAsync = async () => { throw new Error("delivery failed") }
@@ -373,8 +361,8 @@ describe("team_spawn", () => {
     const text = (promptCall!.args[0] as { parts: Array<{ text: string }> }).parts[0]!.text
     expect(text).toContain("team_message")
     expect(text).not.toContain("team_tasks_add")
-    expect(text).not.toContain("team_tasks_complete")
-    expect(text).not.toContain("team_claim")
+    expect(text).toContain("team_tasks_complete")
+    expect(text).toContain("team_claim")
   })
 
   // --- Worktree tests ---

@@ -22,7 +22,7 @@ export async function executeTeamTasksAdd(deps: ToolDeps, args: { tasks: TaskInp
   })
   const result = deps.db.transaction(() => {
     const original = readTaskNodes(deps.db, team.teamId), base = inspectTaskGraph(original)
-    const originalMap = new Map(original.map(task => [task.id, task])), candidate = new Map(originalMap)
+    const originalMap = new Map(original.map(task => [task.id, task])), candidate = new Map(original.map(task => [task.id, { ...task }]))
     const changed = new Set<string>()
     const drafts = normalized.map((input, index) => {
       const id = input.task_id ?? `@ensemble-draft-${index}`
