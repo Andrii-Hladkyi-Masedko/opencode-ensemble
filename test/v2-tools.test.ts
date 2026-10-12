@@ -6,6 +6,7 @@ import { ProgressTracker } from "../src/progress"
 import { createV2Client } from "../src/v2-client"
 import { registerV2Tools, normalizePriority, type V2ToolDef } from "../src/v2-tools"
 import type { ToolDeps } from "../src/types"
+import { PendingTaskDepthApprovals } from "../src/task-depth-approvals"
 
 const TOOL_NAMES = [
   "team_create",
@@ -52,6 +53,7 @@ function mockDeps() {
     registry: new MemberRegistry(),
     tracker: new DescendantTracker(),
     purgeApprovals: new PendingPurgeApprovals(),
+    depthApprovals: new PendingTaskDepthApprovals(),
     client,
     directory: "/tmp/v2-tools-test",
     config: { ...DEFAULT_CONFIG },

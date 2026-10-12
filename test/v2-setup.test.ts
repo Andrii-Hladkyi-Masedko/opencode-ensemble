@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { setupEnsemble, extractQuestionOutput, type V2SetupContext } from "../src/v2-setup"
+import type { DepthScope } from "../src/task-depth-approvals"
 /** Mock V2 setup context: hook registry + programmable event intake. */
 function mockSetupCtx() {
   const hooks: Record<string, Array<(event: never) => unknown>> = {}
@@ -62,6 +63,18 @@ function seedLeadAndMember(handle: Awaited<ReturnType<typeof setupEnsemble>>) { 
 }
 
 describe("v2-setup (issue #36)", () => {
+  test("only successful real question answers authorize depth overflow", async () => {
+    const { ctx, hooks } = mockSetupCtx()
+    const handle = await setupEnsemble(ctx, { dbPath: ":memory:", dashboardPort: 0 })
+    const scope: DepthScope = { sessionId: "lead", teamId: "team", operationKey: "op", baseFingerprint: "base", proposedFingerprint: "new", depthLimit: 4, action: "user_resolve" }
+    const challenge = handle.depthApprovals.create(scope, "Limit 4; depth 5")
+    const event = { tool: "question", sessionID: "lead", status: "error", input: { questions: [{ question: challenge.question, options: [{ label: challenge.approvalLabel }, { label: challenge.denialLabel }] }] }, result: { content: `User has answered your questions: "Depth?"=${JSON.stringify(challenge.approvalLabel)}.` } }
+    await hooks.tool?.[1]?.(event as never)
+    expect(() => handle.depthApprovals.consume(scope, challenge.token)).toThrow("approved")
+    await hooks.tool?.[1]?.({ ...event, status: "success" } as never)
+    expect(() => handle.depthApprovals.consume(scope, challenge.token)).not.toThrow()
+    await handle.dispose()
+  })
   test("dispatched status events flow to member state", async () => {
     const { ctx } = mockSetupCtx()
     const handle = await setupEnsemble(ctx, { dbPath: ":memory:", dashboardPort: 0 })

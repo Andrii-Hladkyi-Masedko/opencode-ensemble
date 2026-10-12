@@ -22,6 +22,7 @@ import { startDashboard, type DashboardServer } from "./dashboard"
 import { EnsembleRpc, emitMemberEvent, emitNoticeEvent } from "./v2-rpc"
 import { isWorktreeInstance } from "./util"
 import { vlog } from "./log"
+import { PendingTaskDepthApprovals, observeDepthQuestionAnswer } from "./task-depth-approvals"
 
 /** V2 setup context subset (structural, mock-friendly). */
 export interface V2SetupContext {
@@ -78,6 +79,7 @@ export interface EnsembleHandle {
   db: Database
   registry: MemberRegistry
   tracker: DescendantTracker
+  depthApprovals: PendingTaskDepthApprovals
   /** Dispatch one event (used by the live subscription loop; tests call directly). */
   dispatch(event: V2EventLike): Promise<void>
   /** Stop the event loop and release resources. */
@@ -98,6 +100,7 @@ export async function setupEnsemble(
   const registry: MemberRegistry = new MemberRegistryImpl()
   const tracker: DescendantTracker = new DescendantTrackerImpl()
   const purgeApprovals = new PendingPurgeApprovals()
+  const depthApprovals = new PendingTaskDepthApprovals()
   const activityBuffer = new ActivityBuffer()
   const progressTracker = new ProgressTracker()
   const nudgedMembers = new Set<string>()
@@ -265,6 +268,7 @@ export async function setupEnsemble(
       }
     }
     if (event.tool === "question") {
+      observeDepthQuestionAnswer(depthApprovals, event.sessionID, extractQuestionOutput(event.result), event.input, event.status === "success")
       // Feed the answer text to purge approvals (team_cleanup confirm flow).
       // The question tool renders in every client, so this is the universal
       // approval channel on V2 — no forms or TUI needed.
@@ -331,6 +335,7 @@ export async function setupEnsemble(
     registry,
     tracker,
     purgeApprovals,
+    depthApprovals,
     client,
     directory: ctx.location.directory,
     config,
@@ -353,6 +358,7 @@ export async function setupEnsemble(
     registry,
     tracker,
     dispatch,
+    depthApprovals,
     dispose: async () => {
       controller.abort()
       dashboard?.stop()

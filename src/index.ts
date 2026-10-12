@@ -38,6 +38,7 @@ import { executeTeamView } from "./tools/team-view"
 import type { ToolDeps, } from "./types"
 import { TokenBucket } from "./rate-limit"
 import { Watchdog } from "./watchdog"
+import { PendingTaskDepthApprovals, observeDepthQuestionAnswer } from "./task-depth-approvals"
 
 const DEFAULT_RATE_LIMIT_REFILL = 2
 const DEFAULT_RATE_LIMIT_INTERVAL_MS = 1000
@@ -61,6 +62,7 @@ const plugin: Plugin = async (input) => {
   const registry = new MemberRegistry()
   const tracker = new DescendantTracker()
   const purgeApprovals = new PendingPurgeApprovals()
+  const depthApprovals = new PendingTaskDepthApprovals()
   const nudgedMembers = new Set<string>()
   const progressTracker = new ProgressTracker()
   const activityBuffer = new ActivityBuffer()
@@ -75,7 +77,7 @@ const plugin: Plugin = async (input) => {
   const rawClient = new OpencodeClient({ client: pluginTransport })
   initLog(rawClient)
   const client = wrapThrowingClient(rawClient)
-  const deps: ToolDeps = { db, registry, tracker, purgeApprovals, client, directory: input.directory, config, progressTracker }
+  const deps: ToolDeps = { db, registry, tracker, purgeApprovals, depthApprovals, client, directory: input.directory, config, progressTracker }
 
   // Recovery only runs for the main project instance — NOT for teammate worktree instances.
   // Worktree instances are created during session.create. Running recovery there makes HTTP
@@ -372,6 +374,7 @@ const plugin: Plugin = async (input) => {
 
     "tool.execute.after": async (input, output) => {
       if (input.tool === "question") {
+        observeDepthQuestionAnswer(depthApprovals, input.sessionID, output.output, input.args, true)
         purgeApprovals.recordQuestionAnswer(input.sessionID, output.output, input.args)
       }
       // Record tool result activity for team member sessions

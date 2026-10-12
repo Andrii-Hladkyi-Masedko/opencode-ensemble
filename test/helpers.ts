@@ -5,6 +5,7 @@ import { MemberRegistry, DescendantTracker, PendingPurgeApprovals } from "../src
 import type { ToolDeps, PluginClient } from "../src/types"
 import { DEFAULT_CONFIG } from "../src/config"
 import { ProgressTracker } from "../src/progress"
+import { PendingTaskDepthApprovals } from "../src/task-depth-approvals"
 
 /** Create a fresh in-memory DB with migrations applied. */
 export function setupDb(): EnsembleDatabase {
@@ -100,6 +101,7 @@ export function setupDeps(db?: EnsembleDatabase): ToolDeps & { client: ReturnTyp
     registry: new MemberRegistry(),
     tracker: new DescendantTracker(),
     purgeApprovals: new PendingPurgeApprovals(),
+    depthApprovals: new PendingTaskDepthApprovals(),
     client: mockClient(),
     directory: "/tmp/test-project",
     config: { ...DEFAULT_CONFIG },
